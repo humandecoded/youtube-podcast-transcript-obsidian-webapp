@@ -1,0 +1,68 @@
+<!-- templates/index.html (excerpt) -->
+{% extends "base.html" %}
+{% block content %}
+
+<div class="grid">
+  <!-- YouTube card (existing) -->
+  <div class="card">
+    <h2>YouTube → Obsidian</h2>
+    <form method="post" action="{{ url_for('summarize') }}">
+      <label> YouTube URL
+        <input type="url" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." required>
+      </label>
+
+      <div class="row">
+        <label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
+        <label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
+      </div>
+
+      <div class="row">
+        <label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
+        <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
+        <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
+      </div>
+
+      <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
+      <label><input type="checkbox" name="no_summary"> Metadata only</label>
+      <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+
+      <button type="submit">Create note</button>
+    </form>
+  </div>
+
+  <!-- Podcast card (new) -->
+  <div class="card">
+    <h2>Podcast → Obsidian</h2>
+    <form method="post" action="{{ url_for('podcast') }}">
+      <label> Podcast Episode URL
+        <input type="url" name="podcast_url" placeholder="https://example.com/episode/..." required>
+      </label>
+
+      <div class="row">
+        <label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
+        <label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
+      </div>
+
+      <div class="row">
+        <label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
+        <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
+        <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
+      </div>
+
+      <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
+      <label><input type="checkbox" name="no_summary"> Metadata only</label>
+      <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+
+      <button type="submit">Create note</button>
+
+      <p class="muted">
+        Tip: ASR fallback (Whisper) is controlled by env on the worker:
+        <code>PODCAST_ASR_ENABLE=1</code>,
+        device via <code>PODCAST_ASR_DEVICE=cuda</code>,
+        compute via <code>PODCAST_ASR_COMPUTE=float16</code>.
+      </p>
+    </form>
+  </div>
+</div>
+
+{% endblock %}

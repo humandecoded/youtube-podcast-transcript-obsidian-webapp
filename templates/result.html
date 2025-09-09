@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>✅ Done</h2>
+  <p><strong>Title:</strong> {{ result.meta.title }}<br>
+     <strong>Channel:</strong> {{ result.meta.channel }}<br>
+     <strong>URL:</strong> <a href="{{ result.meta.url }}" target="_blank" rel="noopener">{{ result.meta.url }}</a></p>
+
+  {% if result.note_path %}
+    <p><strong>Note written to:</strong><br>
+    <code>{{ result.note_path }}</code></p>
+  {% else %}
+    <p class="muted">No vault configured; preview below (nothing was written).</p>
+  {% endif %}
+
+  <h3>{{ 'Metadata' if no_summary else 'Summary' }}</h3>
+  <pre class="code">{{ result.summary }}</pre>
+
+  <p><a class="btn secondary" href="{{ url_for('index') }}">← Back</a></p>
+</div>
+{% endblock %}
+

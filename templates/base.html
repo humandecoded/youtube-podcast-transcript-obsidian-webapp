@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>YouTube → Obsidian Notes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; }
+    header { margin-bottom: 1.5rem; }
+    .card { border: 1px solid #8883; border-radius: 12px; padding: 1rem; box-shadow: 0 1px 8px #0001; background: rgba(255,255,255,0.03); }
+    input[type=text] { width: 100%; padding: .6rem .7rem; border-radius: 8px; border: 1px solid #8885; }
+    label { font-weight: 600; display: block; margin: .5rem 0 .25rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .btn { display: inline-block; padding: .6rem 1rem; border-radius: 8px; border: 1px solid #4445; background: #2b6cb0; color: #fff; cursor: pointer; }
+    .btn.secondary { background: #444; }
+    .alerts { margin: 1rem 0; }
+    .alert { padding: .8rem 1rem; border-radius: 8px; margin-bottom: .6rem; }
+    .error { background: #ffdddd; color: #600; border: 1px solid #e88; }
+    pre.code { white-space: pre-wrap; word-wrap: break-word; background: #111; color: #ddd; padding: 1rem; border-radius: 10px; overflow: auto; }
+    .muted { opacity: .8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎥 YouTube → Obsidian</h1>
+    <p class="muted">Paste a YouTube link, we’ll summarize (or capture metadata) and write a note into your vault.</p>
+  </header>
+
+  <div class="alerts">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+  </div>
+
+  {% block content %}{% endblock %}
+</body>
+</html>
+

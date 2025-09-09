@@ -1,0 +1,50 @@
+services:
+  web:
+    build: .
+    container_name: yt-notes-web
+    env_file: .env
+    ports:
+      - "${PORT:-5050}:5050"
+    depends_on: [redis]
+    volumes:
+      - type: bind
+        source: /absolute/path/to/your/notes/folder
+        target: /vault
+    command: >
+      sh -c "gunicorn -b 0.0.0.0:${PORT:-5050} app:app --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${WEB_TIMEOUT:-600}"
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  worker:
+    build: .
+    container_name: yt-notes-worker
+    env_file: .env
+    depends_on: [redis]
+    volumes:
+      - type: bind
+        source: /absolute/path/to/your/notes/folder
+        target: /vault
+      # cache HF/CT2 models so downloads happen once
+      - models-cache:/root/.cache
+    # Option A: Python script worker
+    command: >
+      sh -c "python worker.py"
+    # Option B (RQ CLI): uncomment to use the built-in worker command
+    # command: >
+    #   sh -c "rq worker -u ${REDIS_URL:-redis://redis:6379/0} ${RQ_QUEUE:-yt}"
+    environment:
+      # Turn on ASR fallback ONLY for the worker
+      - PODCAST_ASR_ENABLE=1
+      # Choose a model: tiny, base, small, medium, large-v3 (bigger = slower/better)
+      - PODCAST_ASR_MODEL=base
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  redis:
+    image: redis:7-alpine
+    container_name: yt-notes-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
+  models-cache:

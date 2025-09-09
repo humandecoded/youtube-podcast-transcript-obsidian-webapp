@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Background job</h2>
+  <p><strong>Job ID:</strong> <code>{{ job_id }}</code></p>
+  <p><strong>Status:</strong> {{ status }}</p>
+
+  {% if refresh_secs and not error %}
+    <p class="muted">Refreshing in {{ refresh_secs }}s…</p>
+    <script>
+      setTimeout(() => location.reload(), {{ refresh_secs * 1000 }});
+    </script>
+  {% endif %}
+
+  {% if error %}
+    <div class="alert error">Error: {{ error }}</div>
+  {% endif %}
+
+  {% if result %}
+    <h3>{{ 'Metadata' if result.summary.startswith('# Summary\n_(no summary') else 'Summary' }}</h3>
+    <pre class="code">{{ result.summary }}</pre>
+
+    {% if result.note_path %}
+      <p><strong>Note written to:</strong><br><code>{{ result.note_path }}</code></p>
+    {% else %}
+      <p class="muted">No vault configured; nothing was written.</p>
+    {% endif %}
+  {% endif %}
+
+  <p><a class="btn secondary" href="{{ url_for('index') }}">← Back</a></p>
+</div>
+{% endblock %}
+
