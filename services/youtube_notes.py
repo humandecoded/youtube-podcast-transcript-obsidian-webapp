@@ -269,7 +269,7 @@ def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[st
 
 # ----------------------------- Summarization (Ollama) -----------------------------
 
-def chunk_text_by_chars(text: str, max_chars: int = 6000) -> List[str]:
+def chunk_text_by_chars(text: str, max_chars: int = 15000) -> List[str]:
     """Greedy word-based chunking to keep prompts under a safe size for local models."""
     if len(text) <= max_chars:
         return [text]
@@ -375,10 +375,10 @@ def ollama_summarize(
             "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps."
         )
 
-    if (not map_reduce) or len(transcript) < 6000:
+    if (not map_reduce) or len(transcript) < 15000:
         return call_ollama_any(base_url, model, map_prompt(transcript))
 
-    parts = [call_ollama_any(base_url, model, map_prompt(ch)) for ch in chunk_text_by_chars(transcript, 6000)]
+    parts = [call_ollama_any(base_url, model, map_prompt(ch)) for ch in chunk_text_by_chars(transcript, 15000)]
     merged = "\n\n---\n\n".join(parts)
     return call_ollama_any(base_url, model, reduce_prompt(merged))
 
