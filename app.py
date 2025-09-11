@@ -65,13 +65,13 @@ def summarize():
     no_summary = request.form.get("no_summary") == "on"
     include_transcript = request.form.get("include_transcript") == "on"
 
-    # Get chunk size from form, default to 6000 if not provided or invalid
+    # Get chunk size from form, default to 15000 if not provided or invalid
     try:
-        chunk_size = int(request.form.get("chunk_size", 6000))
+        chunk_size = int(request.form.get("chunk_size", 15000))
         if chunk_size < 1000:
-            chunk_size = 6000
+            chunk_size = 15000
     except Exception:
-        chunk_size = 6000
+        chunk_size = 15000
 
     job = q.enqueue(
         process_youtube,

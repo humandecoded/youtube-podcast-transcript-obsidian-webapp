@@ -269,7 +269,7 @@ def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[st
 
 # ----------------------------- Summarization (Ollama) -----------------------------
 
-def chunk_text_by_chars(text: str, max_chars: int = 6000) -> List[str]:
+def chunk_text_by_chars(text: str, max_chars: int = 15000) -> List[str]:
     """Greedy word-based chunking to keep prompts under a safe size for local models."""
     if len(text) <= max_chars:
         return [text]
@@ -345,7 +345,7 @@ def ollama_summarize(
     url: str,
     transcript: str,
     map_reduce: bool = True,
-    chunk_size: int = 6000,
+    chunk_size: int = 15000,
 ) -> str:
     """Summarize the transcript with a local Ollama model."""
     if not _check_ollama(base_url):
@@ -504,7 +504,7 @@ def process_youtube(
     map_reduce: bool = True,
     no_summary: bool = False,
     include_transcript: bool = False,
-    chunk_size: int = 6000,
+    chunk_size: int = 15000,
 ) -> Dict[str, Any]:
     """
     Main entrypoint used by Flask/RQ.
