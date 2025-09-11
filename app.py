@@ -65,11 +65,18 @@ def summarize():
     no_summary = request.form.get("no_summary") == "on"
     include_transcript = request.form.get("include_transcript") == "on"
 
-    # Enqueue background job
+    # Get chunk size from form, default to 6000 if not provided or invalid
+    try:
+        chunk_size = int(request.form.get("chunk_size", 6000))
+        if chunk_size < 1000:
+            chunk_size = 6000
+    except Exception:
+        chunk_size = 6000
+
     job = q.enqueue(
         process_youtube,
-        args=(url,),                      # ← put your positional arg(s) here
-        kwargs={                          # ← function keyword-only args go here
+        args=(url,),
+        kwargs={
             "vault": vault,
             "folder": folder,
             "langs": langs or None,
@@ -78,8 +85,9 @@ def summarize():
             "map_reduce": map_reduce,
             "no_summary": no_summary,
             "include_transcript": include_transcript,
+            "chunk_size": chunk_size,
         },
-        description=f"YouTube→Obsidian for {url}",  # ← enqueue options (NOT passed to your function)
+        description=f"YouTube→Obsidian for {url}",
         result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
         failure_ttl=int(os.getenv("RQ_FAILURE_TTL", "604800")),
     )

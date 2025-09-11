@@ -20,6 +20,7 @@
         <label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
         <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
         <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
+    <label>Chunk size(15,000 chars = 3,000 words = 20 minutes = 4,000 tokens) <input type="number" name="chunk_size" min="1000" max="20000" value="6000" step="500" title="Max characters per chunk"></label>
       </div>
 
       <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
