@@ -25,6 +25,8 @@ def index():
         "langs": os.getenv("YT_LANGS", ",".join(DEFAULT_LANGS)),
         "ollama_base": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
+        "context_length": os.getenv("OLLAMA_CONTEXT_LENGTH", "4096"),
+        "chunk_size": os.getenv("CHUNK_SIZE", "15000"),
     })
 
 @app.post("/podcast")
@@ -43,6 +45,7 @@ def podcast():
             map_reduce=request.form.get("map_reduce") == "on",
             no_summary=request.form.get("no_summary") == "on",
             include_transcript=request.form.get("include_transcript") == "on",
+            context_length=int(request.form.get("context_length", 15000)),
         ),
         description=f"Podcast→Obsidian for {url}",
     )
@@ -73,6 +76,14 @@ def summarize():
     except Exception:
         chunk_size = 15000
 
+    # Get context length from form, default to 4096 if not provided or invalid
+    try:
+        context_length = int(request.form.get("context_length", 4096))
+        if context_length < 512:
+            context_length = 4096
+    except Exception:
+        context_length = 4096
+
     job = q.enqueue(
         process_youtube,
         args=(url,),
@@ -86,6 +97,7 @@ def summarize():
             "no_summary": no_summary,
             "include_transcript": include_transcript,
             "chunk_size": chunk_size,
+            "context_length": context_length,
         },
         description=f"YouTube→Obsidian for {url}",
         result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),

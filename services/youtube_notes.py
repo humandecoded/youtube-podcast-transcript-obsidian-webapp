@@ -296,13 +296,18 @@ def _check_ollama(base_url: str) -> bool:
         return False
 
 
-def call_ollama_any(base_url: str, model: str, prompt: str) -> str:
+def call_ollama_any(base_url: str, model: str, prompt: str, context_length: int = 4096) -> str:
     """Try /api/generate, fallback to /api/chat, handle a few proxy shapes."""
     # /api/generate
     try:
         r = requests.post(
             f"{base_url.rstrip('/')}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
+            json={
+                "model": model, 
+                "prompt": prompt, 
+                "stream": False,
+                "options": {"num_ctx": context_length}
+            },
             timeout=600,
             headers={"User-Agent": USER_AGENT},
         )
@@ -316,7 +321,12 @@ def call_ollama_any(base_url: str, model: str, prompt: str) -> str:
     try:
         r = requests.post(
             f"{base_url.rstrip('/')}/api/chat",
-            json={"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False},
+            json={
+                "model": model, 
+                "messages": [{"role": "user", "content": prompt}], 
+                "stream": False,
+                "options": {"num_ctx": context_length}
+            },
             timeout=600,
             headers={"User-Agent": USER_AGENT},
         )
@@ -346,6 +356,7 @@ def ollama_summarize(
     transcript: str,
     map_reduce: bool = True,
     chunk_size: int = 15000,
+    context_length: int = 4096,
 ) -> str:
     """Summarize the transcript with a local Ollama model."""
     if not _check_ollama(base_url):
@@ -377,11 +388,11 @@ def ollama_summarize(
         )
 
     if (not map_reduce) or len(transcript) < chunk_size:
-        return call_ollama_any(base_url, model, map_prompt(transcript))
+        return call_ollama_any(base_url, model, map_prompt(transcript), context_length)
 
-    parts = [call_ollama_any(base_url, model, map_prompt(ch)) for ch in chunk_text_by_chars(transcript, chunk_size)]
+    parts = [call_ollama_any(base_url, model, map_prompt(ch), context_length) for ch in chunk_text_by_chars(transcript, chunk_size)]
     merged = "\n\n---\n\n".join(parts)
-    return call_ollama_any(base_url, model, reduce_prompt(merged))
+    return call_ollama_any(base_url, model, reduce_prompt(merged), context_length)
 
 
 # ----------------------------- Obsidian note -----------------------------
@@ -505,6 +516,7 @@ def process_youtube(
     no_summary: bool = False,
     include_transcript: bool = False,
     chunk_size: int = 15000,
+    context_length: int = 4096,
 ) -> Dict[str, Any]:
     """
     Main entrypoint used by Flask/RQ.
@@ -552,6 +564,7 @@ def process_youtube(
             transcript=transcript_text,
             map_reduce=map_reduce,
             chunk_size=chunk_size,
+            context_length=context_length,
         )
 
     note_path: Optional[str] = None
