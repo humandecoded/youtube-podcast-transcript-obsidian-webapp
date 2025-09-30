@@ -10,3 +10,4 @@ beautifulsoup4
 feedparser
 faster-whisper
 lxml
+requests

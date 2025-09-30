@@ -1,80 +1,76 @@
 <!-- templates/index.html (excerpt) -->
 {% extends "base.html" %}
 {% block content %}
-
 <div class="grid">
-  <!-- YouTube card (existing) -->
-  <div class="card">
-    <h2>YouTube → Obsidian</h2>
-    <form method="post" action="{{ url_for('summarize') }}">
-      <label> YouTube URL
-        <input type="url" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." required>
-      </label>
-
-      <div class="row">
-        <label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
-        <label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
-      </div>
-
-      <div class="row">
-        <label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
-        <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
-        <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
-      </div>
-
-      <div class="form-group">
-    <label for="chunk_size">Chunk size:</label>
-    <input type="number" id="chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 15000 }}" min="1000" max="50000">
-    <small>Size of text chunks for processing (characters)</small>
+<!-- YouTube card (existing) -->
+<div class="card">
+<h2>YouTube → Obsidian</h2>
+<form method="post" action="{{ url_for('summarize') }}">
+<label> YouTube URL
+<input type="url" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." required>
+</label>
+<div class="row">
+<label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
+<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
+</div>
+<div class="row">
+<label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
+<label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
+<label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
 </div>
 <div class="form-group">
-    <label for="context_length">Context length:</label>
-    <input type="number" id="context_length" name="context_length" value="{{ defaults.context_length or 4096 }}" min="512" max="32768">
-    <small>Maximum context size for the LLM (tokens)</small>
+<label for="chunk_size">Chunk size:</label>
+<input type="number" id="chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 15000 }}" min="1000" max="50000">
+<small>Size of text chunks for processing (characters)</small>
 </div>
-
-      <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
-      <label><input type="checkbox" name="no_summary"> Metadata only</label>
-      <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
-
-      <button type="submit">Create note</button>
-    </form>
-  </div>
-
-  <!-- Podcast card (new) -->
-  <div class="card">
-    <h2>Podcast → Obsidian</h2>
-    <form method="post" action="{{ url_for('podcast') }}">
-      <label> Podcast Episode URL
-        <input type="url" name="podcast_url" placeholder="https://example.com/episode/..." required>
-      </label>
-
-      <div class="row">
-        <label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
-        <label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
-      </div>
-
-      <div class="row">
-        <label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
-        <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
-        <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
-      </div>
-
-      <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
-      <label><input type="checkbox" name="no_summary"> Metadata only</label>
-      <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
-
-      <button type="submit">Create note</button>
-
-      <p class="muted">
-        Tip: ASR fallback (Whisper) is controlled by env on the worker:
-        <code>PODCAST_ASR_ENABLE=1</code>,
-        device via <code>PODCAST_ASR_DEVICE=cuda</code>,
-        compute via <code>PODCAST_ASR_COMPUTE=float16</code>.
-      </p>
-    </form>
-  </div>
+<div class="form-group">
+<label for="context_length">Context length:</label>
+<input type="number" id="context_length" name="context_length" value="{{ defaults.context_length or 4096 }}" min="512" max="32768">
+<small>Maximum context size for the LLM (tokens)</small>
 </div>
-
+<label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
+<label><input type="checkbox" name="no_summary"> Metadata only</label>
+<label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+<label><input type="checkbox" name="ntfy_enable"> Enable ntfy</label>
+{% if defaults.ntfy_enabled %}
+<div class="form-group">
+    <label>
+        <input type="checkbox" name="notify_ntfy"> 
+        📱 Notify me when processing is complete
+    </label>
+</div>
+{% endif %}
+<button type="submit">Create note</button>
+</form>
+</div>
+<!-- Podcast card (new) -->
+<div class="card">
+<h2>Podcast → Obsidian</h2>
+<form method="post" action="{{ url_for('podcast') }}">
+<label> Podcast Episode URL
+<input type="url" name="podcast_url" placeholder="https://example.com/episode/..." required>
+</label>
+<div class="row">
+<label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
+<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
+</div>
+<div class="row">
+<label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
+<label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
+<label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
+</div>
+<label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
+<label><input type="checkbox" name="no_summary"> Metadata only</label>
+<label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+<label><input type="checkbox" name="ntfy_enable"> Enable ntfy</label>
+<button type="submit">Create note</button>
+<p class="muted">
+Tip: ASR fallback (Whisper) is controlled by env on the worker:
+<code>PODCAST_ASR_ENABLE=1</code>,
+device via <code>PODCAST_ASR_DEVICE=cuda</code>,
+compute via <code>PODCAST_ASR_COMPUTE=float16</code>.
+</p>
+</form>
+</div>
+</div>
 {% endblock %}
-

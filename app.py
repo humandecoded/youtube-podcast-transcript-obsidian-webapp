@@ -1,4 +1,5 @@
 import os, time
+import requests
 from flask import Flask, render_template, request, redirect, url_for, flash
 from dotenv import load_dotenv
 from redis import Redis
@@ -17,6 +18,56 @@ redis_conn = Redis.from_url(redis_url)
 queue_name = os.getenv("RQ_QUEUE", "yt")
 q = Queue(queue_name, connection=redis_conn, default_timeout=int(os.getenv("RQ_JOB_TIMEOUT", "3600")))
 
+# NTFY configuration
+NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
+NTFY_AUTH_TOKEN = os.getenv("NTFY_AUTH_TOKEN", "")
+
+def send_ntfy_notification(title, message, priority="default", tags=""):
+    """Send notification via NTFY"""
+    if not NTFY_TOPIC:
+        return False
+    
+    try:
+        headers = {
+            "Title": title,
+            "Priority": priority,
+            "Tags": tags
+        }
+        
+        if NTFY_AUTH_TOKEN:
+            headers["Authorization"] = f"Bearer {NTFY_AUTH_TOKEN}"
+        
+        response = requests.post(
+            f"{NTFY_SERVER}/{NTFY_TOPIC}",
+            data=message,
+            headers=headers,
+            timeout=10
+        )
+        return response.status_code == 200
+    except Exception as e:
+        print(f"NTFY notification failed: {e}")
+        return False
+
+def create_job_with_notification(func, args, kwargs, description, notify=False, url=""):
+    """Create a job and optionally set up notification"""
+    job = q.enqueue(
+        func,
+        args=args,
+        kwargs=kwargs,
+        description=description,
+        result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
+        failure_ttl=int(os.getenv("RQ_FAILURE_TTL", "604800")),
+    )
+    
+    # Store notification preference in job meta
+    if notify and NTFY_TOPIC:
+        job.meta["notify"] = True
+        job.meta["url"] = url
+        job.save_meta()
+    
+    return job
+
 @app.get("/")
 def index():
     return render_template("index.html", defaults={
@@ -27,13 +78,15 @@ def index():
         "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         "context_length": os.getenv("OLLAMA_CONTEXT_LENGTH", "4096"),
         "chunk_size": os.getenv("CHUNK_SIZE", "15000"),
+        "ntfy_enabled": bool(NTFY_TOPIC),
     })
 
 @app.post("/podcast")
 def podcast():
     url = (request.form.get("podcast_url") or "").strip()
-    # pull same options (vault/folder/langs/ollama...) from form/env
-    job = q.enqueue(
+    notify = request.form.get("notify_ntfy") == "on"
+    
+    job = create_job_with_notification(
         process_podcast,
         args=(url,),
         kwargs=dict(
@@ -48,6 +101,8 @@ def podcast():
             context_length=int(request.form.get("context_length", 15000)),
         ),
         description=f"Podcast→Obsidian for {url}",
+        notify=notify,
+        url=url
     )
     return redirect(url_for("job_status", job_id=job.get_id()))
 
@@ -58,6 +113,8 @@ def summarize():
         flash("Please paste a YouTube URL.", "error")
         return redirect(url_for("index"))
 
+    notify = request.form.get("notify_ntfy") == "on"
+    print(notify)
     # Gather options
     vault = (request.form.get("vault") or "").strip() or None
     folder = (request.form.get("folder") or "").strip()
@@ -84,7 +141,7 @@ def summarize():
     except Exception:
         context_length = 4096
 
-    job = q.enqueue(
+    job = create_job_with_notification(
         process_youtube,
         args=(url,),
         kwargs={
@@ -100,8 +157,8 @@ def summarize():
             "context_length": context_length,
         },
         description=f"YouTube→Obsidian for {url}",
-        result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
-        failure_ttl=int(os.getenv("RQ_FAILURE_TTL", "604800")),
+        notify=notify,
+        url=url
     )
 
     return redirect(url_for("job_status", job_id=job.get_id()))
@@ -117,6 +174,24 @@ def job_status(job_id):
     status = job.get_status(refresh=True)
     result = job.result if job.is_finished else None
     error = None
+    
+    # Check if we need to send notification
+    if job.is_finished or job.is_failed:
+        if job.meta.get("notify") and not job.meta.get("notification_sent"):
+            url = job.meta.get("url", "")
+            if job.is_finished:
+                title = "Processing Complete"
+                message = f"Successfully processed: {url}"
+                tags = "white_check_mark"
+            else:
+                title = "Processing Failed"
+                message = f"Failed to process: {url}"
+                tags = "x"
+                
+            if send_ntfy_notification(title, message, tags=tags):
+                job.meta["notification_sent"] = True
+                job.save_meta()
+    
     if job.is_failed:
         error = str(job.exc_info).splitlines()[-1][:1000] if job.exc_info else "Job failed"
 
