@@ -5,8 +5,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Add ffmpeg for audio demuxing (yt-dlp + ASR)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata curl ffmpeg \
+    ca-certificates tzdata curl ffmpeg unzip \
   && rm -rf /var/lib/apt/lists/*
+
+# Install Bun for yt-dlp JavaScript runtime
+RUN curl -fsSL https://bun.sh/install | bash
+
+# Add Bun to PATH
+ENV PATH="/root/.bun/bin:${PATH}"
 
 WORKDIR /app
 
