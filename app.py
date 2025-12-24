@@ -124,6 +124,7 @@ def summarize():
     map_reduce = request.form.get("map_reduce") == "on"
     no_summary = request.form.get("no_summary") == "on"
     include_transcript = request.form.get("include_transcript") == "on"
+    per_hour = request.form.get("per_hour") == "on"
 
     # Get chunk size from form, default to 15000 if not provided or invalid
     try:
@@ -155,6 +156,7 @@ def summarize():
             "include_transcript": include_transcript,
             "chunk_size": chunk_size,
             "context_length": context_length,
+            "per_hour": per_hour,
         },
         description=f"YouTube→Obsidian for {url}",
         notify=notify,

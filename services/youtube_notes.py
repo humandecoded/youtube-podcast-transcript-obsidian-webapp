@@ -64,7 +64,13 @@ def fetch_metadata(url: str) -> Dict[str, Any]:
         "extract_flat": False,
         "extractor_retries": 3,
         "forceipv4": True,
+        "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}},
+       # "extractor_args": {"youtube": {"player_client": ["web"]}},
     }
+    cookies_file = os.getenv("YTDLP_COOKIES")
+    if cookies_file and os.path.exists(cookies_file):
+        ydl_opts["cookiefile"] = cookies_file
+    
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return {
@@ -152,6 +158,8 @@ def _ytdlp_subtitles_fallback(youtube_url: str, langs: List[str]) -> Tuple[str, 
             "nocheckcertificate": True,
             "extractor_retries": 3,
             "forceipv4": True,
+            "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}},
+           # "extractor_args": {"youtube": {"player_client": ["web"]}},
         }
         cookies_file = os.getenv("YTDLP_COOKIES")
         if cookies_file and os.path.exists(cookies_file):
@@ -288,6 +296,46 @@ def chunk_text_by_chars(text: str, max_chars: int = 15000) -> List[str]:
     return chunks
 
 
+def chunk_segments_by_duration(segments: List[Dict[str, Any]], duration_seconds: int = 3600) -> List[Tuple[str, float, float]]:
+    """Chunk transcript segments by time duration (e.g., per hour).
+    Returns: [(text, start_time, end_time), ...]
+    """
+    if not segments:
+        return []
+    
+    chunks: List[Tuple[str, float, float]] = []
+    current_texts: List[str] = []
+    chunk_start = 0.0
+    current_end = duration_seconds
+    
+    for seg in segments:
+        start = seg.get("start", 0)
+        text = seg.get("text", "").strip()
+        
+        if not text:
+            continue
+            
+        # If this segment starts beyond current chunk boundary
+        if start >= current_end:
+            # Save current chunk
+            if current_texts:
+                chunks.append((" ".join(current_texts), chunk_start, current_end))
+            # Start new chunk
+            chunk_start = current_end
+            current_end = chunk_start + duration_seconds
+            current_texts = [text]
+        else:
+            current_texts.append(text)
+    
+    # Save final chunk
+    if current_texts:
+        # Use actual last segment time if available
+        actual_end = segments[-1].get("start", current_end) + segments[-1].get("duration", 0)
+        chunks.append((" ".join(current_texts), chunk_start, min(actual_end, current_end)))
+    
+    return chunks
+
+
 def _check_ollama(base_url: str) -> bool:
     try:
         r = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=10)
@@ -357,8 +405,15 @@ def ollama_summarize(
     map_reduce: bool = True,
     chunk_size: int = 15000,
     context_length: int = 4096,
+    segments: Optional[List[Dict[str, Any]]] = None,
+    per_hour: bool = False,
 ) -> str:
-    """Summarize the transcript with a local Ollama model."""
+    """Summarize the transcript with a local Ollama model.
+    
+    Args:
+        per_hour: If True, create independent hourly summaries without reduce phase.
+                 Requires segments parameter.
+    """
     if not _check_ollama(base_url):
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
 
@@ -386,6 +441,33 @@ def ollama_summarize(
             "## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
             "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps."
         )
+
+    # Per-hour mode: independent summaries without reduce phase
+    if per_hour and segments:
+        time_chunks = chunk_segments_by_duration(segments, duration_seconds=3600)
+        if not time_chunks:
+            return "# Summary\n\n_(No content to summarize)_"
+        
+        result_parts: List[str] = []
+        for i, (chunk_text, start_sec, end_sec) in enumerate(time_chunks, 1):
+            start_hms = fmt_hms(int(start_sec))
+            end_hms = fmt_hms(int(end_sec))
+            
+            hour_prompt = (
+                f"{SYS}\n\nSummarize this portion of a YouTube stream/video.\n"
+                f"Title: {title}\nURL: {url}\n"
+                f"Time Range: {start_hms} - {end_hms}\n\n"
+                f"Provide a concise summary with:\n"
+                f"- Main topics discussed\n"
+                f"- Key points and takeaways\n"
+                f"- Notable quotes (if any)\n\n"
+                f'Transcript:\n"""' + chunk_text + '"""'
+            )
+            
+            summary = call_ollama_any(base_url, model, hour_prompt, context_length)
+            result_parts.append(f"## Hour {i}: {start_hms} - {end_hms}\n\n{summary}")
+        
+        return "# Summary\n\n" + "\n\n".join(result_parts)
 
     if (not map_reduce) or len(transcript) < chunk_size:
         return call_ollama_any(base_url, model, map_prompt(transcript), context_length)
@@ -517,6 +599,7 @@ def process_youtube(
     include_transcript: bool = False,
     chunk_size: int = 15000,
     context_length: int = 4096,
+    per_hour: bool = False,
 ) -> Dict[str, Any]:
     """
     Main entrypoint used by Flask/RQ.
@@ -555,7 +638,7 @@ def process_youtube(
                 transcript_text = None
         body = make_metadata_only_body(meta, transcript_text=transcript_text)
     else:
-        transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url)
+        transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url)
         body = ollama_summarize(
             base_url=ollama_base,
             model=model,
@@ -565,6 +648,8 @@ def process_youtube(
             map_reduce=map_reduce,
             chunk_size=chunk_size,
             context_length=context_length,
+            segments=segments,
+            per_hour=per_hour,
         )
 
     note_path: Optional[str] = None
