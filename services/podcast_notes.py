@@ -4,11 +4,7 @@ Podcast → Obsidian utilities
 
 - Input: podcast episode URL (Apple/Spotify/site/host page or RSS <item> link)
 - Metadata: via yt-dlp (no media download)
-- Transcript:
-    1) Scrape episode page for transcript blocks/links
-    2) Discover RSS <link rel="alternate" type="application/rss+xml">; look for Podcasting 2.0 <podcast:transcript>
-       (handles text/html/VTT/SRT/JSON)
-    3) Optional fallback: download audio (yt-dlp) + local ASR with faster-whisper (if enabled)
+- Transcript: download audio (yt-dlp) + local ASR with faster-whisper
 - Summarize: local Ollama
 - Write: Obsidian note with YAML front matter (+ consumed: today)
 
@@ -19,8 +15,10 @@ Env (.env):
   OLLAMA_MODEL=llama3.1:8b
   CONSUMED_TZ=America/Detroit
   YTDLP_COOKIES=/vault/.podcast_cookies.txt              (optional)
-  PODCAST_ASR_ENABLE=0|1                                 (optional; enables Whisper fallback)
-  PODCAST_ASR_MODEL=base                                 (optional; faster-whisper model, e.g. medium)
+  PODCAST_ASR_ENABLE=1                                   (required; enables Whisper transcription)
+  PODCAST_ASR_MODEL=base                                 (optional; faster-whisper model, e.g. medium, large-v3)
+  PODCAST_ASR_DEVICE=cpu|cuda                            (optional; default: cpu)
+  PODCAST_ASR_COMPUTE=int8|float16|float32               (optional; default: int8)
 """
 
 from __future__ import annotations
@@ -135,314 +133,6 @@ def _fmt_yyyymmdd(s: Optional[str]) -> Optional[str]:
     return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
 
 
-# ----------------------------- Transcript: webpage scrape -----------------------------
-
-TRANSCRIPT_HINTS = [
-    "transcript", "Transcript", "TRANSCRIPT",
-    "show-notes", "shownotes", "show_notes",
-    "episode-transcript", "episode_transcript",
-]
-
-def _html_text(el: Any) -> str:
-    for tag in el(["script", "style", "noscript"]):
-        tag.decompose()
-    text = el.get_text("\n", strip=True)
-    return re.sub(r"\n{2,}", "\n\n", text).strip()
-
-
-def try_scrape_transcript_from_page(url: str) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
-    """
-    Heuristic: fetch the page, look for obvious transcript blocks or links.
-    Returns (text, segments|None). Text can be long; segments omitted for page scrape.
-    """
-    try:
-        r = requests.get(url, timeout=20, headers={"User-Agent": USER_AGENT})
-        r.raise_for_status()
-    except Exception:
-        return None, None
-
-    soup = BeautifulSoup(r.text, "lxml")
-
-    # 1) Obvious transcript containers by id/class
-    for hint in TRANSCRIPT_HINTS:
-        node = soup.select_one(f'#{hint}, .{hint}, [data-section*="{hint}"]')
-        if node:
-            txt = _html_text(node)
-            if len(txt.split()) > 50:
-                return txt, None
-
-    # 2) Section headers containing 'transcript'
-    for h in soup.find_all(re.compile(r"^h[1-6]$")):
-        if "transcript" in (h.get_text(" ", strip=True) or "").lower():
-            # collect following siblings until next header
-            buf = [h.get_text(" ", strip=True)]
-            for sib in h.find_all_next():
-                if sib.name and re.fullmatch(r"h[1-6]", sib.name, re.I):
-                    break
-                if sib.name in ("p", "div", "li"):
-                    buf.append(sib.get_text(" ", strip=True))
-            txt = "\n\n".join(x for x in buf if x).strip()
-            if len(txt.split()) > 50:
-                return txt, None
-
-    # 3) Link to a transcript page
-    for a in soup.find_all("a", href=True):
-        label = (a.get_text(" ", strip=True) or "") + " " + (a.get("aria-label") or "")
-        if "transcript" in label.lower():
-            turl = requests.compat.urljoin(url, a["href"])
-            try:
-                r2 = requests.get(turl, timeout=20, headers={"User-Agent": USER_AGENT})
-                r2.raise_for_status()
-                soup2 = BeautifulSoup(r2.text, "lxml")
-                main = soup2.find("main") or soup2.find("article") or soup2.body
-                if main:
-                    txt = _html_text(main)
-                    if len(txt.split()) > 50:
-                        return txt, None
-            except Exception:
-                pass
-
-    return None, None
-
-
-# ----------------------------- Transcript: RSS + podcast:transcript -----------------------------
-
-def _discover_rss_link(url: str) -> Optional[str]:
-    try:
-        r = requests.get(url, timeout=15, headers={"User-Agent": USER_AGENT})
-        r.raise_for_status()
-    except Exception:
-        return None
-
-    soup = BeautifulSoup(r.text, "lxml")
-    for link in soup.find_all("link", attrs={"rel": "alternate"}):
-        t = (link.get("type") or "").lower()
-        if "rss" in t or "xml" in t:
-            href = link.get("href")
-            if href:
-                return requests.compat.urljoin(url, href)
-    return None
-
-
-def _fetch(url: str) -> Optional[str]:
-    try:
-        r = requests.get(url, timeout=25, headers={"User-Agent": USER_AGENT})
-        r.raise_for_status()
-        return r.text
-    except Exception:
-        return None
-
-
-def _normalize(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "").strip().lower())
-
-
-def _choose_entry(feed: Any, page_url: str, page_title: Optional[str]) -> Optional[feedparser.FeedParserDict]:
-    # Prefer exact link match; fallback: title containment
-    for e in feed.entries:
-        if _normalize(e.get("link", "")) == _normalize(page_url):
-            return e
-    if page_title:
-        p = _normalize(page_title)
-        best = None
-        for e in feed.entries:
-            t = _normalize(e.get("title", ""))
-            if t and (t in p or p in t):
-                best = e
-                break
-        if best:
-            return best
-    # last resort: first entry
-    return feed.entries[0] if feed.entries else None
-
-
-def _parse_podcast_transcript_tag(item_xml: ET.Element) -> Optional[Tuple[str, str]]:
-    """
-    Return (url, mimetype) from <podcast:transcript> if present.
-    """
-    # podcast namespace
-    ns = {"podcast": "https://podcastindex.org/namespace/1.0"}
-    for el in item_xml.findall(".//podcast:transcript", ns):
-        url = el.attrib.get("url")
-        typ = el.attrib.get("type", "")
-        if url:
-            return url, typ
-    return None
-
-
-def _parse_vtt_to_segments(vtt_text: str) -> List[Dict[str, Any]]:
-    def _parse_ts(ts: str) -> float:
-        parts = ts.split(":")
-        if len(parts) == 3:
-            h, m, s = parts
-        else:
-            h, m, s = "0", parts[0], parts[1]
-        s = s.replace(",", ".")
-        return int(h) * 3600 + int(m) * 60 + float(s)
-
-    lines = [ln.rstrip("\n") for ln in vtt_text.splitlines()]
-    segs: List[Dict[str, Any]] = []
-    i, n = 0, len(lines)
-    while i < n:
-        ln = lines[i].strip(); i += 1
-        if not ln or ln.startswith(("WEBVTT", "NOTE")):
-            continue
-        if ln.isdigit() and i < n:
-            ln = lines[i].strip(); i += 1
-        if "-->" not in ln:
-            continue
-        try:
-            ts1, ts2 = [t.strip() for t in ln.split("-->", 1)]
-            start = _parse_ts(ts1.split(" ")[0]); end = _parse_ts(ts2.split(" ")[0])
-            buf = []
-            while i < n and lines[i].strip():
-                buf.append(lines[i].strip()); i += 1
-            while i < n and not lines[i].strip():
-                i += 1
-            text = " ".join(buf).strip()
-            if text:
-                segs.append({"text": text, "start": start, "duration": max(0.0, end - start)})
-        except Exception:
-            continue
-    return segs
-
-
-def _parse_srt_to_segments(srt_text: str) -> List[Dict[str, Any]]:
-    def _to_sec(h: int, m: int, s: int, ms: int) -> float:
-        return h * 3600 + m * 60 + s + ms / 1000.0
-
-    segs: List[Dict[str, Any]] = []
-    blocks = re.split(r"\n\s*\n", srt_text.strip(), flags=re.M)
-    for b in blocks:
-        lines = [ln.strip() for ln in b.splitlines() if ln.strip()]
-        if not lines:
-            continue
-        if re.fullmatch(r"\d+", lines[0]):
-            lines = lines[1:]
-        if not lines:
-            continue
-        if "-->" not in lines[0]:
-            continue
-        ts = lines[0]
-        m = re.search(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})", ts)
-        if not m:
-            continue
-        sh, sm, ss, sms, eh, em, es, ems = map(int, m.groups())
-        start = _to_sec(sh, sm, ss, sms)
-        end = _to_sec(eh, em, es, ems)
-        text = " ".join(lines[1:])
-        if text:
-            segs.append({"text": text, "start": start, "duration": max(0.0, end - start)})
-    return segs
-
-
-def try_transcript_via_rss(url: str) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
-    """
-    Discover RSS and try to read Podcasting 2.0 transcript for the matching item.
-    Returns (text, segments|None).
-    """
-    rss = _discover_rss_link(url)
-    # Also capture page title for entry matching
-    page_html = _fetch(url)
-    page_title = None
-    if page_html:
-        soup = BeautifulSoup(page_html, "lxml")
-        meta_title = soup.find("meta", attrs={"property": "og:title"})
-        page_title = (meta_title.get("content") if meta_title else soup.title.string if soup.title else None)
-
-    if not rss:
-        return None, None
-
-    # Pull both parsed and raw XML to access extension tags
-    feed = feedparser.parse(rss)
-    raw_xml = _fetch(rss)
-    if not raw_xml or not feed.entries:
-        return None, None
-
-    entry = _choose_entry(feed, url, page_title)
-    if not entry:
-        return None, None
-
-    # Find matching <item> via guid or link
-    root = ET.fromstring(raw_xml)
-    channel = root.find("channel")
-    item_xml = None
-    if channel is not None:
-        for it in channel.findall("item"):
-            guid_el = it.find("guid")
-            link_el = it.find("link")
-            title_el = it.find("title")
-            guid = guid_el.text.strip() if guid_el is not None and guid_el.text else ""
-            link = link_el.text.strip() if link_el is not None and link_el.text else ""
-            title = title_el.text.strip() if title_el is not None and title_el.text else ""
-            if (entry.get("id") and entry.get("id") == guid) or \
-               (_normalize(entry.get("link","")) == _normalize(link)) or \
-               (_normalize(entry.get("title","")) == _normalize(title)):
-                item_xml = it
-                break
-
-    if item_xml is None:
-        return None, None
-
-    tr = _parse_podcast_transcript_tag(item_xml)
-    if not tr:
-        # Sometimes transcript is embedded in <content:encoded>
-        content_encoded = item_xml.find("{http://purl.org/rss/1.0/modules/content/}encoded")
-        if content_encoded is not None and content_encoded.text:
-            soup = BeautifulSoup(content_encoded.text, "lxml")
-            txt = soup.get_text("\n", strip=True)
-            if len(txt.split()) > 50:
-                return txt, None
-        return None, None
-
-    tr_url, tr_type = tr
-    tr_text = _fetch(tr_url)
-    if not tr_text:
-        return None, None
-
-    # Handle common types
-    t = (tr_type or "").lower()
-    if "vtt" in t:
-        segs = _parse_vtt_to_segments(tr_text)
-        text = " ".join(s["text"] for s in segs if s.get("text"))
-        return text, segs
-    if "srt" in t or "subrip" in t:
-        segs = _parse_srt_to_segments(tr_text)
-        text = " ".join(s["text"] for s in segs if s.get("text"))
-        return text, segs
-    if "json" in t:
-        # Very loose assumption: list of {text,start,duration} or {start,end,text}
-        try:
-            data = json.loads(tr_text)
-            segs = []
-            if isinstance(data, list):
-                for it in data:
-                    if isinstance(it, dict):
-                        text = it.get("text") or it.get("body") or ""
-                        start = float(it.get("start", it.get("begin", 0)))
-                        dur = float(it.get("duration", max(0.0, float(it.get("end", start)) - start)))
-                        if text:
-                            segs.append({"text": str(text), "start": start, "duration": dur})
-            if segs:
-                text = " ".join(s["text"] for s in segs if s.get("text"))
-                return text, segs
-        except Exception:
-            pass
-
-    # text/plain or text/html or unknown → extract readable text
-    if "html" in t:
-        soup = BeautifulSoup(tr_text, "lxml")
-        txt = soup.get_text("\n", strip=True)
-        if len(txt.split()) > 10:
-            return txt, None
-    # plain text
-    txt = tr_text.strip()
-    if len(txt.split()) > 10:
-        return txt, None
-
-    return None, None
-
-
 # ----------------------------- Optional ASR fallback (faster-whisper) -----------------------------
 
 def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
@@ -519,6 +209,46 @@ def chunk_text_by_chars(text: str, max_chars: int = 15000) -> List[str]:
     return chunks
 
 
+def chunk_segments_by_duration(segments: List[Dict[str, Any]], duration_seconds: int = 1800) -> List[Tuple[str, float, float]]:
+    """Chunk transcript segments by time duration (e.g., per 30 minutes).
+    Returns: [(text, start_time, end_time), ...]
+    """
+    if not segments:
+        return []
+    
+    chunks: List[Tuple[str, float, float]] = []
+    current_texts: List[str] = []
+    chunk_start = 0.0
+    current_end = duration_seconds
+    
+    for seg in segments:
+        start = seg.get("start", 0)
+        text = seg.get("text", "").strip()
+        
+        if not text:
+            continue
+            
+        # If this segment starts beyond current chunk boundary
+        if start >= current_end:
+            # Save current chunk
+            if current_texts:
+                chunks.append((" ".join(current_texts), chunk_start, current_end))
+            # Start new chunk
+            chunk_start = current_end
+            current_end = chunk_start + duration_seconds
+            current_texts = [text]
+        else:
+            current_texts.append(text)
+    
+    # Save final chunk
+    if current_texts:
+        # Use actual last segment time if available
+        actual_end = segments[-1].get("start", current_end) + segments[-1].get("duration", 0)
+        chunks.append((" ".join(current_texts), chunk_start, min(actual_end, current_end)))
+    
+    return chunks
+
+
 def _check_ollama(base_url: str) -> bool:
     try:
         r = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=10)
@@ -527,11 +257,18 @@ def _check_ollama(base_url: str) -> bool:
         return False
 
 
-def call_ollama_any(base_url: str, model: str, prompt: str) -> str:
+def call_ollama_any(base_url: str, model: str, prompt: str, context_length: int = 15000) -> str:
+    """Try /api/generate, fallback to /api/chat, handle a few proxy shapes."""
+    # /api/generate
     try:
         r = requests.post(
             f"{base_url.rstrip('/')}/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
+            json={
+                "model": model, 
+                "prompt": prompt, 
+                "stream": False,
+                "options": {"num_ctx": context_length}
+            },
             timeout=600,
             headers={"User-Agent": USER_AGENT},
         )
@@ -539,10 +276,16 @@ def call_ollama_any(base_url: str, model: str, prompt: str) -> str:
             return r.json().get("response","")
     except Exception:
         pass
+    # /api/chat
     try:
         r = requests.post(
             f"{base_url.rstrip('/')}/api/chat",
-            json={"model": model, "messages": [{"role":"user","content": prompt}], "stream": False},
+            json={
+                "model": model, 
+                "messages": [{"role":"user","content": prompt}], 
+                "stream": False,
+                "options": {"num_ctx": context_length}
+            },
             timeout=600,
             headers={"User-Agent": USER_AGENT},
         )
@@ -559,7 +302,7 @@ def call_ollama_any(base_url: str, model: str, prompt: str) -> str:
     raise RuntimeError(f"Ollama API not responding at {base_url}.")
 
 
-def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, map_reduce: bool=True) -> str:
+def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, segments: Optional[List[Dict[str, Any]]] = None, map_reduce: bool=True, chunk_size: int=15000, context_length: int=15000, per_segment: bool=False, segment_duration: int=1800) -> str:
     if not _check_ollama(base_url):
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
 
@@ -588,12 +331,39 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
             "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps."
         )
 
-    if (not map_reduce) or len(transcript) < 15000:
-        return call_ollama_any(base_url, model, map_prompt(transcript))
+    # Per-segment mode: independent summaries without reduce phase
+    if per_segment and segments:
+        time_chunks = chunk_segments_by_duration(segments, duration_seconds=segment_duration)
+        if not time_chunks:
+            return "# Summary\n\n_(No content to summarize)_"
+        
+        result_parts: List[str] = []
+        for i, (chunk_text, start_sec, end_sec) in enumerate(time_chunks, 1):
+            start_hms = fmt_hms(int(start_sec))
+            end_hms = fmt_hms(int(end_sec))
+            
+            segment_prompt = (
+                f"{SYS}\n\nSummarize this portion of a podcast episode.\n"
+                f"Show: {show}\nTitle: {title}\nURL: {url}\n"
+                f"Time Range: {start_hms} - {end_hms}\n\n"
+                f"Provide a concise summary with:\n"
+                f"- Main topics discussed\n"
+                f"- Key points and takeaways\n"
+                f"- Notable quotes (if any)\n\n"
+                f'Transcript:\n"""' + chunk_text + '"""'
+            )
+            
+            summary = call_ollama_any(base_url, model, segment_prompt, context_length)
+            result_parts.append(f"## Segment {i}: {start_hms} - {end_hms}\n\n{summary}")
+        
+        return "# Summary\n\n" + "\n\n".join(result_parts)
 
-    parts = [call_ollama_any(base_url, model, map_prompt(ch)) for ch in chunk_text_by_chars(transcript, 15000)]
+    if (not map_reduce) or len(transcript) < chunk_size:
+        return call_ollama_any(base_url, model, map_prompt(transcript), context_length)
+
+    parts = [call_ollama_any(base_url, model, map_prompt(ch), context_length) for ch in chunk_text_by_chars(transcript, chunk_size)]
     merged = "\n\n---\n\n".join(parts)
-    return call_ollama_any(base_url, model, reduce_prompt(merged))
+    return call_ollama_any(base_url, model, reduce_prompt(merged), context_length)
 
 
 # ----------------------------- YAML + Note Writing -----------------------------
@@ -687,12 +457,20 @@ def process_podcast(
     map_reduce: bool = True,
     no_summary: bool = False,
     include_transcript: bool = False,
+    chunk_size: int = 15000,
+    context_length: int = 15000,
+    per_segment: bool = False,
+    segment_duration: int = 1800,
 ) -> Dict[str, Any]:
     """
     Main entrypoint (mirrors youtube_notes.process_youtube signature).
     Returns:
       { "meta": {...}, "summary": "<md>", "note_path": "/abs/path.md" }
     Raises on hard failures (so RQ can record them).
+    chunk_size: Character-based chunking size for map-reduce.
+    context_length: Ollama context window size (num_ctx).
+    per_segment: If True, create independent summaries without reduce phase.
+    segment_duration: Duration in seconds for each segment (default: 1800 = 30 minutes).
     """
     load_dotenv()
 
@@ -705,20 +483,15 @@ def process_podcast(
     # 1) Metadata
     meta = fetch_podcast_metadata(podcast_url)
 
-    # 2) Transcript (page → RSS → ASR)
-    page_txt, _ = try_scrape_transcript_from_page(podcast_url)
-    rss_txt, rss_segs = (None, None) if page_txt else try_transcript_via_rss(podcast_url)
-    asr_txt, asr_segs = (None, None) if (page_txt or rss_txt) else try_transcript_via_asr(podcast_url)
-
-    transcript_text = page_txt or rss_txt or asr_txt
-    transcript_segments = rss_segs or asr_segs  # only used if we care about timestamps later
+    # 2) Transcript (ASR only - download and transcribe audio)
+    transcript_text, transcript_segments = try_transcript_via_asr(podcast_url)
 
     # 3) Body
     if no_summary:
         body = make_metadata_only_body(meta, transcript_text if include_transcript else None)
     else:
         if not transcript_text:
-            raise RuntimeError("No transcript found (page & RSS), and ASR fallback disabled or failed.")
+            raise RuntimeError("Audio transcription failed. Ensure PODCAST_ASR_ENABLE=1 and faster-whisper is installed.")
         body = summarize_with_ollama(
             base_url=ollama_base,
             model=model,
@@ -726,7 +499,12 @@ def process_podcast(
             show=meta.get("show") or "",
             url=meta.get("url") or podcast_url,
             transcript=transcript_text,
+            segments=transcript_segments,
             map_reduce=map_reduce,
+            chunk_size=chunk_size,
+            context_length=context_length,
+            per_segment=per_segment,
+            segment_duration=segment_duration,
         )
 
     # 4) Write note

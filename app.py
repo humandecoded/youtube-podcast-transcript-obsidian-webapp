@@ -86,6 +86,30 @@ def podcast():
     url = (request.form.get("podcast_url") or "").strip()
     notify = request.form.get("notify_ntfy") == "on"
     
+    # Get chunk size from form, default to 15000 if not provided or invalid
+    try:
+        chunk_size = int(request.form.get("chunk_size", 15000))
+        if chunk_size < 1000:
+            chunk_size = 15000
+    except Exception:
+        chunk_size = 15000
+    
+    # Get context length from form, default to 15000 if not provided or invalid
+    try:
+        context_length = int(request.form.get("context_length", 15000))
+        if context_length < 512:
+            context_length = 15000
+    except Exception:
+        context_length = 15000
+    
+    # Get segment duration from form, default to 1800 (30 minutes) if not provided or invalid
+    try:
+        segment_duration = int(request.form.get("segment_duration", 1800))
+        if segment_duration < 60:  # minimum 1 minute
+            segment_duration = 1800
+    except Exception:
+        segment_duration = 1800
+    
     job = create_job_with_notification(
         process_podcast,
         args=(url,),
@@ -98,7 +122,10 @@ def podcast():
             map_reduce=request.form.get("map_reduce") == "on",
             no_summary=request.form.get("no_summary") == "on",
             include_transcript=request.form.get("include_transcript") == "on",
-            context_length=int(request.form.get("context_length", 15000)),
+            chunk_size=chunk_size,
+            context_length=context_length,
+            per_segment=request.form.get("per_segment") == "on",
+            segment_duration=segment_duration,
         ),
         description=f"Podcast→Obsidian for {url}",
         notify=notify,

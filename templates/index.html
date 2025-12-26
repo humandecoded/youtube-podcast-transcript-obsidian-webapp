@@ -20,17 +20,21 @@
 </div>
 <div class="form-group">
 <label for="chunk_size">Chunk size:</label>
-<input type="number" id="chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 15000 }}" min="1000" max="50000">
+<input type="number" id="chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 20000 }}" min="1000" max="50000">
 <small>Size of text chunks for processing (characters)</small>
 </div>
 <div class="form-group">
 <label for="context_length">Context length:</label>
-<input type="number" id="context_length" name="context_length" value="{{ defaults.context_length or 4096 }}" min="512" max="128000">
+<input type="number" id="context_length" name="context_length" value="{{ defaults.context_length or 32000 }}" min="512" max="128000">
 <small>Maximum context size for the LLM (tokens)</small>
 </div>
 <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
 <label><input type="checkbox" name="no_summary"> Metadata only</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+<label>
+    <input type="checkbox" name="per_hour"> 
+    ⏱️ Per-hour summaries (for long streams, no reduce phase)
+</label>
 <label><input type="checkbox" name="ntfy_enable"> Enable ntfy</label>
 {% if defaults.ntfy_enabled %}
 <div class="form-group">
@@ -59,9 +63,28 @@
 <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
 <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
 </div>
+<div class="form-group">
+<label for="podcast_chunk_size">Chunk size:</label>
+<input type="number" id="podcast_chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 15000 }}" min="1000" max="50000">
+<small>Size of text chunks for processing (characters)</small>
+</div>
+<div class="form-group">
+<label for="podcast_context_length">Context length:</label>
+<input type="number" id="podcast_context_length" name="context_length" value="{{ defaults.context_length or 15000 }}" min="512" max="128000">
+<small>Maximum context size for the LLM (tokens)</small>
+</div>
+<div class="form-group">
+<label for="podcast_segment_duration">Segment duration (seconds):</label>
+<input type="number" id="podcast_segment_duration" name="segment_duration" value="1800" min="60" max="7200" step="60">
+<small>Duration for each segment when using per-segment summaries (1800 = 30 min)</small>
+</div>
 <label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
 <label><input type="checkbox" name="no_summary"> Metadata only</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+<label>
+    <input type="checkbox" name="per_segment"> 
+    ⏱️ Per-segment summaries (no reduce phase)
+</label>
 <label><input type="checkbox" name="ntfy_enable"> Enable ntfy</label>
 <button type="submit">Create note</button>
 <p class="muted">
