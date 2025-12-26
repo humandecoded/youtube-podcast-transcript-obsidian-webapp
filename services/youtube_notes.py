@@ -407,12 +407,14 @@ def ollama_summarize(
     context_length: int = 4096,
     segments: Optional[List[Dict[str, Any]]] = None,
     per_hour: bool = False,
+    segment_duration: int = 3600,
 ) -> str:
     """Summarize the transcript with a local Ollama model.
     
     Args:
-        per_hour: If True, create independent hourly summaries without reduce phase.
+        per_hour: If True, create independent summaries without reduce phase.
                  Requires segments parameter.
+        segment_duration: Duration in seconds for each segment (default: 3600 = 1 hour).
     """
     if not _check_ollama(base_url):
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
@@ -444,7 +446,7 @@ def ollama_summarize(
 
     # Per-hour mode: independent summaries without reduce phase
     if per_hour and segments:
-        time_chunks = chunk_segments_by_duration(segments, duration_seconds=3600)
+        time_chunks = chunk_segments_by_duration(segments, duration_seconds=segment_duration)
         if not time_chunks:
             return "# Summary\n\n_(No content to summarize)_"
         
@@ -465,7 +467,7 @@ def ollama_summarize(
             )
             
             summary = call_ollama_any(base_url, model, hour_prompt, context_length)
-            result_parts.append(f"## Hour {i}: {start_hms} - {end_hms}\n\n{summary}")
+            result_parts.append(f"## Segment {i}: {start_hms} - {end_hms}\n\n{summary}")
         
         return "# Summary\n\n" + "\n\n".join(result_parts)
 
@@ -600,6 +602,7 @@ def process_youtube(
     chunk_size: int = 15000,
     context_length: int = 4096,
     per_hour: bool = False,
+    segment_duration: int = 3600,
 ) -> Dict[str, Any]:
     """
     Main entrypoint used by Flask/RQ.
@@ -650,6 +653,7 @@ def process_youtube(
             context_length=context_length,
             segments=segments,
             per_hour=per_hour,
+            segment_duration=segment_duration,
         )
 
     note_path: Optional[str] = None

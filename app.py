@@ -169,6 +169,14 @@ def summarize():
     except Exception:
         context_length = 4096
 
+    # Get segment duration from form, default to 3600 (1 hour) if not provided or invalid
+    try:
+        segment_duration = int(request.form.get("segment_duration", 3600))
+        if segment_duration < 60:  # minimum 1 minute
+            segment_duration = 3600
+    except Exception:
+        segment_duration = 3600
+
     job = create_job_with_notification(
         process_youtube,
         args=(url,),
@@ -183,6 +191,8 @@ def summarize():
             "include_transcript": include_transcript,
             "chunk_size": chunk_size,
             "context_length": context_length,
+            "per_hour": per_hour,
+            "segment_duration": segment_duration,
             "per_hour": per_hour,
         },
         description=f"YouTube→Obsidian for {url}",
