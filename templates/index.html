@@ -21,7 +21,7 @@
 <div class="form-group">
 <label for="chunk_size">Chunk size:</label>
 <input type="number" id="chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 20000 }}" min="1000" max="50000">
-<small>Size of text chunks for processing (characters)</small>
+<small>Size of text chunks for processing (characters). Does not apply to per-segment summaries</small>
 </div>
 <div class="form-group">
 <label for="context_length">Context length:</label>
@@ -31,14 +31,14 @@
 <div class="form-group">
 <label for="yt_segment_duration">Segment duration (seconds):</label>
 <input type="number" id="yt_segment_duration" name="segment_duration" value="3600" min="60" max="7200" step="60">
-<small>Duration for each segment when using per-hour summaries (3600 = 1 hour)</small>
+<small>Duration for each segment when using per-time summaries (3600 = 1 hour). Does not apply to map-reduce</small>
 </div>
-<label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
-<label><input type="checkbox" name="no_summary"> Metadata only</label>
+<label><input type="checkbox" name="map_reduce" id="yt_map_reduce" checked> Map-reduce (summary of summaries)</label>
+<label><input type="checkbox" name="no_summary"> Metadata only (for just setting up a note)</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
 <label>
-    <input type="checkbox" name="per_hour"> 
-    ⏱️ Per-hour summaries (for long streams, no reduce phase)
+    <input type="checkbox" name="per_hour" id="yt_per_hour"> 
+    ⏱️ Per-segment summaries (for long streams, no reduce phase)
 </label>
 <button type="submit">Create note</button>
 </form>
@@ -62,7 +62,7 @@
 <div class="form-group">
 <label for="podcast_chunk_size">Chunk size:</label>
 <input type="number" id="podcast_chunk_size" name="chunk_size" value="{{ defaults.chunk_size or 15000 }}" min="1000" max="50000">
-<small>Size of text chunks for processing (characters)</small>
+<small>Size of text chunks for processing (characters). Does not apply to per-segment summaries</small>
 </div>
 <div class="form-group">
 <label for="podcast_context_length">Context length:</label>
@@ -72,13 +72,13 @@
 <div class="form-group">
 <label for="podcast_segment_duration">Segment duration (seconds):</label>
 <input type="number" id="podcast_segment_duration" name="segment_duration" value="1800" min="60" max="7200" step="60">
-<small>Duration for each segment when using per-segment summaries (1800 = 30 min)</small>
+<small>Duration for each segment when using per-time summaries (3600 = 1 hour). Does not apply to map-reduce</small>
 </div>
-<label><input type="checkbox" name="map_reduce" checked> Map-reduce</label>
-<label><input type="checkbox" name="no_summary"> Metadata only</label>
+<label><input type="checkbox" name="map_reduce" id="podcast_map_reduce" checked> Map-reduce (summary of summaries)</label>
+<label><input type="checkbox" name="no_summary"> Metadata only (for just setting up a note)</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
 <label>
-    <input type="checkbox" name="per_segment"> 
+    <input type="checkbox" name="per_segment" id="podcast_per_segment"> 
     ⏱️ Per-segment summaries (no reduce phase)
 </label>
 <button type="submit">Create note</button>
@@ -91,4 +91,39 @@ compute via <code>PODCAST_ASR_COMPUTE=float16</code>.
 </form>
 </div>
 </div>
+
+<script>
+// Make map-reduce and per-segment checkboxes mutually exclusive in YouTube card
+const ytMapReduce = document.getElementById('yt_map_reduce');
+const ytPerHour = document.getElementById('yt_per_hour');
+
+ytMapReduce.addEventListener('change', function() {
+    if (this.checked) {
+        ytPerHour.checked = false;
+    }
+});
+
+ytPerHour.addEventListener('change', function() {
+    if (this.checked) {
+        ytMapReduce.checked = false;
+    }
+});
+
+// Make map-reduce and per-segment checkboxes mutually exclusive in Podcast card
+const podcastMapReduce = document.getElementById('podcast_map_reduce');
+const podcastPerSegment = document.getElementById('podcast_per_segment');
+
+podcastMapReduce.addEventListener('change', function() {
+    if (this.checked) {
+        podcastPerSegment.checked = false;
+    }
+});
+
+podcastPerSegment.addEventListener('change', function() {
+    if (this.checked) {
+        podcastMapReduce.checked = false;
+    }
+});
+</script>
+
 {% endblock %}
