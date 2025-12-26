@@ -33,7 +33,7 @@
 <input type="number" id="yt_segment_duration" name="segment_duration" value="3600" min="60" max="7200" step="60">
 <small>Duration for each segment when using per-time summaries (3600 = 1 hour). Does not apply to map-reduce</small>
 </div>
-<label><input type="checkbox" name="map_reduce" id="yt_map_reduce" checked> Map-reduce (summary of summaries)</label>
+<label><input type="checkbox" name="map_reduce" id="yt_map_reduce"> Map-reduce (summary of summaries)</label>
 <label><input type="checkbox" name="no_summary"> Metadata only (for just setting up a note)</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
 <label>
@@ -74,7 +74,7 @@
 <input type="number" id="podcast_segment_duration" name="segment_duration" value="1800" min="60" max="7200" step="60">
 <small>Duration for each segment when using per-time summaries (3600 = 1 hour). Does not apply to map-reduce</small>
 </div>
-<label><input type="checkbox" name="map_reduce" id="podcast_map_reduce" checked> Map-reduce (summary of summaries)</label>
+<label><input type="checkbox" name="map_reduce" id="podcast_map_reduce"> Map-reduce (summary of summaries)</label>
 <label><input type="checkbox" name="no_summary"> Metadata only (for just setting up a note)</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
 <label>
@@ -82,12 +82,7 @@
     ⏱️ Per-segment summaries (no reduce phase)
 </label>
 <button type="submit">Create note</button>
-<p class="muted">
-Tip: ASR fallback (Whisper) is controlled by env on the worker:
-<code>PODCAST_ASR_ENABLE=1</code>,
-device via <code>PODCAST_ASR_DEVICE=cuda</code>,
-compute via <code>PODCAST_ASR_COMPUTE=float16</code>.
-</p>
+
 </form>
 </div>
 </div>
