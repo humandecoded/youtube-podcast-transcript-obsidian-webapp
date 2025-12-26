@@ -402,8 +402,6 @@ def ollama_summarize(
     title: str,
     url: str,
     transcript: str,
-    map_reduce: bool = True,
-    chunk_size: int = 15000,
     context_length: int = 4096,
     segments: Optional[List[Dict[str, Any]]] = None,
     per_hour: bool = False,
@@ -412,7 +410,7 @@ def ollama_summarize(
     """Summarize the transcript with a local Ollama model.
     
     Args:
-        per_hour: If True, create independent summaries without reduce phase.
+        per_hour: If True, create independent summaries for each time segment.
                  Requires segments parameter.
         segment_duration: Duration in seconds for each segment (default: 3600 = 1 hour).
     """
@@ -425,26 +423,20 @@ def ollama_summarize(
         "Base everything only on the transcript; do not invent facts."
     )
 
-    def map_prompt(chunk: str) -> str:
+    def full_prompt(text: str) -> str:
         return (
-            f"{SYS}\n\nYou will summarize part of a YouTube transcript.\n"
+            f"{SYS}\n\nYou will summarize a YouTube transcript.\n"
             f"Title: {title}\nURL: {url}\n\n"
-            f"Write concise bullets with key ideas, facts, steps, and short quotes.\n\n"
-            f'Transcript chunk:\n"""' + chunk + '"""'
+            f"Provide a well-structured Markdown summary with:\n"
+            f"# Summary\n1–3 paragraph executive summary.\n\n"
+            f"## Key Points\n- Bulleted list of the most important takeaways.\n\n"
+            f"## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
+            f"## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
+            f"## Memorable Quotes\n- Short quotes (≤20 words) with timestamps.\n\n"
+            f'Transcript:\n"""' + text + '"""'
         )
 
-    def reduce_prompt(partials_md: str) -> str:
-        return (
-            f"{SYS}\n\nUnify the partial summaries into a well-structured Markdown note:\n\n{partials_md}\n\n"
-            "# Summary\n"
-            "1–3 paragraph executive summary.\n\n"
-            "## Key Points\n- Bulleted list of the most important takeaways.\n\n"
-            "## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
-            "## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
-            "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps."
-        )
-
-    # Per-hour mode: independent summaries without reduce phase
+    # Per-hour mode: independent summaries for each time segment
     if per_hour and segments:
         time_chunks = chunk_segments_by_duration(segments, duration_seconds=segment_duration)
         if not time_chunks:
@@ -455,7 +447,7 @@ def ollama_summarize(
             start_hms = fmt_hms(int(start_sec))
             end_hms = fmt_hms(int(end_sec))
             
-            hour_prompt = (
+            segment_prompt = (
                 f"{SYS}\n\nSummarize this portion of a YouTube stream/video.\n"
                 f"Title: {title}\nURL: {url}\n"
                 f"Time Range: {start_hms} - {end_hms}\n\n"
@@ -466,17 +458,13 @@ def ollama_summarize(
                 f'Transcript:\n"""' + chunk_text + '"""'
             )
             
-            summary = call_ollama_any(base_url, model, hour_prompt, context_length)
+            summary = call_ollama_any(base_url, model, segment_prompt, context_length)
             result_parts.append(f"## Segment {i}: {start_hms} - {end_hms}\n\n{summary}")
         
         return "# Summary\n\n" + "\n\n".join(result_parts)
 
-    if (not map_reduce) or len(transcript) < chunk_size:
-        return call_ollama_any(base_url, model, map_prompt(transcript), context_length)
-
-    parts = [call_ollama_any(base_url, model, map_prompt(ch), context_length) for ch in chunk_text_by_chars(transcript, chunk_size)]
-    merged = "\n\n---\n\n".join(parts)
-    return call_ollama_any(base_url, model, reduce_prompt(merged), context_length)
+    # Default: full transcript summary
+    return call_ollama_any(base_url, model, full_prompt(transcript), context_length)
 
 
 # ----------------------------- Obsidian note -----------------------------
@@ -596,16 +584,13 @@ def process_youtube(
     langs: Optional[List[str]] = None,
     ollama_base: Optional[str] = None,
     model: Optional[str] = None,
-    map_reduce: bool = True,
     no_summary: bool = False,
     include_transcript: bool = False,
-    chunk_size: int = 15000,
     context_length: int = 4096,
     per_hour: bool = False,
     segment_duration: int = 3600,
 ) -> Dict[str, Any]:
-    """
-    Main entrypoint used by Flask/RQ.
+    """Main entrypoint used by Flask/RQ.
 
     Returns:
       {
@@ -648,8 +633,6 @@ def process_youtube(
             title=meta.get("title") or "",
             url=meta.get("url") or youtube_url,
             transcript=transcript_text,
-            map_reduce=map_reduce,
-            chunk_size=chunk_size,
             context_length=context_length,
             segments=segments,
             per_hour=per_hour,

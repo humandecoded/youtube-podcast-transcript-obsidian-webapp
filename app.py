@@ -27,20 +27,11 @@ def index():
         "ollama_base": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         "context_length": os.getenv("OLLAMA_CONTEXT_LENGTH", "4096"),
-        "chunk_size": os.getenv("CHUNK_SIZE", "15000"),
     })
 
 @app.post("/podcast")
 def podcast():
     url = (request.form.get("podcast_url") or "").strip()
-    
-    # Get chunk size from form, default to 15000 if not provided or invalid
-    try:
-        chunk_size = int(request.form.get("chunk_size", 15000))
-        if chunk_size < 1000:
-            chunk_size = 15000
-    except Exception:
-        chunk_size = 15000
     
     # Get context length from form, default to 15000 if not provided or invalid
     try:
@@ -67,10 +58,8 @@ def podcast():
             langs=[s.strip() for s in (request.form.get("langs") or "").split(",") if s.strip()] or None,
             ollama_base=(request.form.get("ollama_base") or None),
             model=(request.form.get("model") or None),
-            map_reduce=request.form.get("map_reduce") == "on",
             no_summary=request.form.get("no_summary") == "on",
             include_transcript=request.form.get("include_transcript") == "on",
-            chunk_size=chunk_size,
             context_length=context_length,
             per_segment=request.form.get("per_segment") == "on",
             segment_duration=segment_duration,
@@ -94,18 +83,9 @@ def summarize():
     langs = [s.strip() for s in (request.form.get("langs") or "").split(",") if s.strip()]
     ollama_base = (request.form.get("ollama_base") or "").strip() or None
     model = (request.form.get("model") or "").strip() or None
-    map_reduce = request.form.get("map_reduce") == "on"
     no_summary = request.form.get("no_summary") == "on"
     include_transcript = request.form.get("include_transcript") == "on"
     per_hour = request.form.get("per_hour") == "on"
-
-    # Get chunk size from form, default to 15000 if not provided or invalid
-    try:
-        chunk_size = int(request.form.get("chunk_size", 15000))
-        if chunk_size < 1000:
-            chunk_size = 15000
-    except Exception:
-        chunk_size = 15000
 
     # Get context length from form, default to 4096 if not provided or invalid
     try:
@@ -132,10 +112,8 @@ def summarize():
             "langs": langs or None,
             "ollama_base": ollama_base,
             "model": model,
-            "map_reduce": map_reduce,
             "no_summary": no_summary,
             "include_transcript": include_transcript,
-            "chunk_size": chunk_size,
             "context_length": context_length,
             "per_hour": per_hour,
             "segment_duration": segment_duration,

@@ -308,7 +308,7 @@ def call_ollama_any(base_url: str, model: str, prompt: str, context_length: int 
     raise RuntimeError(f"Ollama API not responding at {base_url}.")
 
 
-def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, segments: Optional[List[Dict[str, Any]]] = None, map_reduce: bool=True, chunk_size: int=15000, context_length: int=15000, per_segment: bool=False, segment_duration: int=1800) -> str:
+def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, segments: Optional[List[Dict[str, Any]]] = None, context_length: int=15000, per_segment: bool=False, segment_duration: int=1800) -> str:
     if not _check_ollama(base_url):
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
 
@@ -318,26 +318,20 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
         "Base everything only on the transcript; do not invent facts."
     )
 
-    def map_prompt(chunk: str) -> str:
+    def full_prompt(text: str) -> str:
         return (
-            f"{SYS}\n\nYou will summarize part of a podcast transcript.\n"
+            f"{SYS}\n\nYou will summarize a podcast transcript.\n"
             f"Show: {show}\nTitle: {title}\nURL: {url}\n\n"
-            f"Write concise bullets with key ideas, facts, steps, and short quotes.\n\n"
-            f'Transcript chunk:\n"""' + chunk + '"""'
+            f"Provide a well-structured Markdown summary with:\n"
+            f"# Summary\n1–3 paragraph executive summary.\n\n"
+            f"## Key Points\n- Bulleted list of the most important takeaways.\n\n"
+            f"## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
+            f"## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
+            f"## Memorable Quotes\n- Short quotes (≤20 words) with timestamps.\n\n"
+            f'Transcript:\n"""' + text + '"""'
         )
 
-    def reduce_prompt(parts_md: str) -> str:
-        return (
-            f"{SYS}\n\nUnify the partial summaries into a well-structured Markdown note:\n\n{parts_md}\n\n"
-            "# Summary\n"
-            "1–3 paragraph executive summary.\n\n"
-            "## Key Points\n- Bulleted list of the most important takeaways.\n\n"
-            "## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
-            "## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
-            "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps."
-        )
-
-    # Per-segment mode: independent summaries without reduce phase
+    # Per-segment mode: independent summaries for each time segment
     if per_segment and segments:
         time_chunks = chunk_segments_by_duration(segments, duration_seconds=segment_duration)
         if not time_chunks:
@@ -364,12 +358,8 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
         
         return "# Summary\n\n" + "\n\n".join(result_parts)
 
-    if (not map_reduce) or len(transcript) < chunk_size:
-        return call_ollama_any(base_url, model, map_prompt(transcript), context_length)
-
-    parts = [call_ollama_any(base_url, model, map_prompt(ch), context_length) for ch in chunk_text_by_chars(transcript, chunk_size)]
-    merged = "\n\n---\n\n".join(parts)
-    return call_ollama_any(base_url, model, reduce_prompt(merged), context_length)
+    # Default: full transcript summary
+    return call_ollama_any(base_url, model, full_prompt(transcript), context_length)
 
 
 # ----------------------------- YAML + Note Writing -----------------------------
@@ -460,22 +450,20 @@ def process_podcast(
     langs: Optional[List[str]] = None,
     ollama_base: Optional[str] = None,
     model: Optional[str] = None,
-    map_reduce: bool = True,
     no_summary: bool = False,
     include_transcript: bool = False,
-    chunk_size: int = 15000,
     context_length: int = 15000,
     per_segment: bool = False,
     segment_duration: int = 1800,
 ) -> Dict[str, Any]:
-    """
-    Main entrypoint (mirrors youtube_notes.process_youtube signature).
+    """Main entrypoint (mirrors youtube_notes.process_youtube signature).
+    
     Returns:
       { "meta": {...}, "summary": "<md>", "note_path": "/abs/path.md" }
     Raises on hard failures (so RQ can record them).
-    chunk_size: Character-based chunking size for map-reduce.
+    
     context_length: Ollama context window size (num_ctx).
-    per_segment: If True, create independent summaries without reduce phase.
+    per_segment: If True, create independent summaries for each time segment.
     segment_duration: Duration in seconds for each segment (default: 1800 = 30 minutes).
     """
     load_dotenv()
@@ -506,8 +494,6 @@ def process_podcast(
             url=meta.get("url") or podcast_url,
             transcript=transcript_text,
             segments=transcript_segments,
-            map_reduce=map_reduce,
-            chunk_size=chunk_size,
             context_length=context_length,
             per_segment=per_segment,
             segment_duration=segment_duration,
