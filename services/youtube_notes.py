@@ -27,6 +27,7 @@ import json
 import glob
 import shutil
 import tempfile
+import random
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -41,6 +42,23 @@ USER_AGENT = "obsidian-youtube-noter/2.1"
 
 # ----------------------------- URL & metadata -----------------------------
 
+def _get_random_proxy() -> Optional[str]:
+    """Read proxy list file and return a random proxy."""
+    proxy_file = os.getenv("YTDLP_PROXY_FILE")
+    if not proxy_file or not os.path.exists(proxy_file):
+        return None
+    
+    try:
+        with open(proxy_file, "r", encoding="utf-8") as f:
+            proxies = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+        
+        if proxies:
+            return random.choice(proxies)
+    except Exception:
+        pass
+    
+    return None
+
 def extract_yt_id(url: str) -> Optional[str]:
     """Extract the 11-char YouTube video ID from various URL styles or accept a bare ID."""
     m = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
@@ -54,8 +72,11 @@ def extract_yt_id(url: str) -> Optional[str]:
     return None
 
 
-def fetch_metadata(url: str, use_cookies: bool = False) -> Dict[str, Any]:
-    """Use yt-dlp to get basic metadata without downloading the media."""
+def fetch_metadata(url: str, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Use yt-dlp to get basic metadata without downloading the media.
+    Returns: (metadata_dict, proxy_used)
+    """
+    proxy_used = None
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -71,6 +92,11 @@ def fetch_metadata(url: str, use_cookies: bool = False) -> Dict[str, Any]:
         cookies_file = os.getenv("YTDLP_COOKIES")
         if cookies_file and os.path.exists(cookies_file):
             ydl_opts["cookiefile"] = cookies_file
+    if use_proxy:
+        proxy = _get_random_proxy()
+        if proxy:
+            ydl_opts["proxy"] = proxy
+            proxy_used = proxy
     
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -82,7 +108,7 @@ def fetch_metadata(url: str, use_cookies: bool = False) -> Dict[str, Any]:
         "url": info.get("webpage_url") or url,
         "id": info.get("id"),
         "channel_id": info.get("channel_id"),
-    }
+    }, proxy_used
 
 
 # ----------------------------- VTT parsing + yt-dlp fallback -----------------------------
@@ -136,11 +162,12 @@ def _parse_vtt_to_segments(vtt_text: str) -> List[Dict[str, Any]]:
     return segs
 
 
-def _fetch_subtitles_via_ytdlp(youtube_url: str, langs: Optional[List[str]] = None, use_cookies: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
+def _fetch_subtitles_via_ytdlp(youtube_url: str, langs: Optional[List[str]] = None, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Ask yt-dlp to download auto or manual subtitles (VTT) for the given URL, then parse them.
     Returns (full_text, segments). Raises if nothing is available.
     Uses cookies if use_cookies=True and YTDLP_COOKIES (Netscape format) is set in env.
+    Uses proxy if use_proxy=True and YTDLP_PROXY is set in env.
     """
     tmpdir = tempfile.mkdtemp(prefix="subs_")
     try:
@@ -166,6 +193,10 @@ def _fetch_subtitles_via_ytdlp(youtube_url: str, langs: Optional[List[str]] = No
             cookies_file = os.getenv("YTDLP_COOKIES")
             if cookies_file and os.path.exists(cookies_file):
                 ydl_opts["cookiefile"] = cookies_file
+        if use_proxy:
+            proxy = _get_random_proxy()
+            if proxy:
+                ydl_opts["proxy"] = proxy
 
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=True)
@@ -208,7 +239,7 @@ def _to_raw(obj: Any) -> List[Dict[str, Any]]:
         return []
 
 
-def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[str] = None, use_cookies: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
+def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[str] = None, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Fetch transcript via NEW youtube-transcript-api instance API (.fetch/.list).
     If unavailable, fall back to yt-dlp auto/manual VTT subtitles.
@@ -274,7 +305,7 @@ def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[st
                     continue
 
     # 3) Final fallback: download auto/manual VTT subs via yt-dlp
-    return _fetch_subtitles_via_ytdlp(youtube_url, langs, use_cookies)
+    return _fetch_subtitles_via_ytdlp(youtube_url, langs, use_cookies, use_proxy)
 
 
 # ----------------------------- Summarization (Ollama) -----------------------------
@@ -589,6 +620,7 @@ def process_youtube(
     no_summary: bool = False,
     include_transcript: bool = False,
     use_cookies: bool = False,
+    use_proxy: bool = False,
     context_length: int = 4096,
     per_hour: bool = False,
     segment_duration: int = 3600,
@@ -617,19 +649,19 @@ def process_youtube(
         raise ValueError("Invalid YouTube URL/ID")
 
     # Metadata first (always)
-    meta = fetch_metadata(youtube_url, use_cookies=use_cookies)
+    meta, proxy_used = fetch_metadata(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
 
     # Build note body
     if no_summary:
         transcript_text: Optional[str] = None
         if include_transcript:
             try:
-                transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies)
+                transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
             except Exception:
                 transcript_text = None
         body = make_metadata_only_body(meta, transcript_text=transcript_text)
     else:
-        transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies)
+        transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
         body = ollama_summarize(
             base_url=ollama_base,
             model=model,
@@ -646,4 +678,4 @@ def process_youtube(
     if vault:
         note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
 
-    return {"meta": meta, "summary": body, "note_path": note_path}
+    return {"meta": meta, "summary": body, "note_path": note_path, "proxy_used": proxy_used}

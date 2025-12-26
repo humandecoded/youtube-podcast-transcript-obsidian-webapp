@@ -17,6 +17,10 @@
   {% endif %}
 
   {% if result %}
+    {% if result.proxy_used %}
+      <p class="muted">🌐 Using proxy: <code>{{ result.proxy_used }}</code></p>
+    {% endif %}
+    
     <h3>{{ 'Metadata' if result.summary.startswith('# Summary\n_(no summary') else 'Summary' }}</h3>
     <pre class="code">{{ result.summary }}</pre>
 

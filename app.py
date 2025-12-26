@@ -86,6 +86,7 @@ def summarize():
     no_summary = request.form.get("no_summary") == "on"
     include_transcript = request.form.get("include_transcript") == "on"
     use_cookies = request.form.get("use_cookies") == "on"
+    use_proxy = request.form.get("use_proxy") == "on"
     per_hour = request.form.get("per_hour") == "on"
 
     # Get context length from form, default to 4096 if not provided or invalid
@@ -115,6 +116,7 @@ def summarize():
             "model": model,
             "no_summary": no_summary,
             "include_transcript": include_transcript,
+            "use_proxy": use_proxy,
             "context_length": context_length,
             "per_hour": per_hour,
             "segment_duration": segment_duration,
