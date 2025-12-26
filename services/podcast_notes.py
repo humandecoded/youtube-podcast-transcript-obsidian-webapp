@@ -177,8 +177,10 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         if not audio_path:
             return None, None
 
-        model_name = os.getenv("PODCAST_ASR_MODEL", "base")
-        model = WhisperModel(model_name, compute_type="int8")  # lightweight default
+        model_name = os.getenv("PODCAST_ASR_MODEL")
+        device = os.getenv("PODCAST_ASR_DEVICE")
+        compute_type = os.getenv("PODCAST_ASR_COMPUTE")
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
         segments, _ = model.transcribe(audio_path, vad_filter=True)
         segs_list: List[Dict[str, Any]] = []
         for seg in segments:
