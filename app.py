@@ -85,6 +85,7 @@ def summarize():
     model = (request.form.get("model") or "").strip() or None
     no_summary = request.form.get("no_summary") == "on"
     include_transcript = request.form.get("include_transcript") == "on"
+    use_cookies = request.form.get("use_cookies") == "on"
     per_hour = request.form.get("per_hour") == "on"
 
     # Get context length from form, default to 4096 if not provided or invalid
@@ -118,6 +119,7 @@ def summarize():
             "per_hour": per_hour,
             "segment_duration": segment_duration,
             "per_hour": per_hour,
+            "use_cookies": use_cookies,
         },
         description=f"YouTube→Obsidian for {url}",
         url=url,

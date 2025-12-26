@@ -14,7 +14,6 @@ Env (.env):
   OLLAMA_BASE_URL=http://host.docker.internal:11434
   OLLAMA_MODEL=llama3.1:8b
   CONSUMED_TZ=America/Detroit
-  YTDLP_COOKIES=/vault/.podcast_cookies.txt              (optional)
   PODCAST_ASR_ENABLE=1                                   (required; enables Whisper transcription)
   PODCAST_ASR_MODEL=base                                 (optional; faster-whisper model, e.g. medium, large-v3)
   PODCAST_ASR_DEVICE=cpu|cuda                            (optional; default: cpu)
@@ -90,9 +89,6 @@ def fetch_podcast_metadata(url: str) -> Dict[str, Any]:
         "extractor_retries": 3,
         "forceipv4": True,
     }
-    cookies_file = os.getenv("YTDLP_COOKIES")
-    if cookies_file and os.path.exists(cookies_file):
-        ydl_opts["cookiefile"] = cookies_file
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -145,7 +141,6 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
     except Exception:
         return None, None
 
-    cookies_file = os.getenv("YTDLP_COOKIES")
     ydl_opts: Dict[str, Any] = {
         "quiet": True,
         "noplaylist": True,
@@ -155,8 +150,6 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         "format": "bestaudio/best",
         "outtmpl": "%(id)s.%(ext)s",
     }
-    if cookies_file and os.path.exists(cookies_file):
-        ydl_opts["cookiefile"] = cookies_file
 
     tmpdir = tempfile.mkdtemp(prefix="pod_asr_")
     audio_path = None
