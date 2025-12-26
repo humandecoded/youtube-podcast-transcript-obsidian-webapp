@@ -19,6 +19,7 @@ Env (.env):
   PODCAST_ASR_MODEL=base                                 (optional; faster-whisper model, e.g. medium, large-v3)
   PODCAST_ASR_DEVICE=cpu|cuda                            (optional; default: cpu)
   PODCAST_ASR_COMPUTE=int8|float16|float32               (optional; default: int8)
+  PODCAST_ASR_BATCH_SIZE=1                               (optional; batch size for transcription, higher=faster on GPU)
 """
 
 from __future__ import annotations
@@ -37,8 +38,6 @@ from xml.etree import ElementTree as ET
 import requests
 from dotenv import load_dotenv
 from yt_dlp import YoutubeDL
-import feedparser  # type: ignore
-from bs4 import BeautifulSoup  # type: ignore
 
 # Optional timezone support
 try:
@@ -180,8 +179,14 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         model_name = os.getenv("PODCAST_ASR_MODEL")
         device = os.getenv("PODCAST_ASR_DEVICE")
         compute_type = os.getenv("PODCAST_ASR_COMPUTE")
+        batch_size = int(os.getenv("PODCAST_ASR_BATCH_SIZE", "1"))
+        
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        segments, _ = model.transcribe(audio_path, vad_filter=True)
+        segments, _ = model.transcribe(
+            audio_path, 
+            vad_filter=True,
+            batch_size=batch_size
+        )
         segs_list: List[Dict[str, Any]] = []
         for seg in segments:
             segs_list.append({
