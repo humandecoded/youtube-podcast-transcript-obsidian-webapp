@@ -40,15 +40,6 @@
     <input type="checkbox" name="per_hour"> 
     ⏱️ Per-hour summaries (for long streams, no reduce phase)
 </label>
-<label><input type="checkbox" name="ntfy_enable"> Enable ntfy</label>
-{% if defaults.ntfy_enabled %}
-<div class="form-group">
-    <label>
-        <input type="checkbox" name="notify_ntfy"> 
-        📱 Notify me when processing is complete
-    </label>
-</div>
-{% endif %}
 <button type="submit">Create note</button>
 </form>
 </div>
@@ -90,7 +81,6 @@
     <input type="checkbox" name="per_segment"> 
     ⏱️ Per-segment summaries (no reduce phase)
 </label>
-<label><input type="checkbox" name="ntfy_enable"> Enable ntfy</label>
 <button type="submit">Create note</button>
 <p class="muted">
 Tip: ASR fallback (Whisper) is controlled by env on the worker:

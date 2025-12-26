@@ -33,7 +33,6 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
-from xml.etree import ElementTree as ET
 
 import requests
 from dotenv import load_dotenv
