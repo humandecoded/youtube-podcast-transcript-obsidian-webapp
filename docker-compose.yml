@@ -31,11 +31,7 @@ services:
     # Option B (RQ CLI): uncomment to use the built-in worker command
     # command: >
     #   sh -c "rq worker -u ${REDIS_URL:-redis://redis:6379/0} ${RQ_QUEUE:-yt}"
-    environment:
-      # Turn on ASR fallback ONLY for the worker
-      - PODCAST_ASR_ENABLE=1
-      # Choose a model: tiny, base, small, medium, large-v3 (bigger = slower/better)
-      - PODCAST_ASR_MODEL=base
+
     extra_hosts: ["host.docker.internal:host-gateway"]
 
   redis:
