@@ -99,6 +99,7 @@ def fetch_podcast_metadata(url: str) -> Dict[str, Any]:
         "extract_flat": False,
         "extractor_retries": 3,
         "forceipv4": True,
+        "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}}
     }
 
     try:
@@ -178,6 +179,7 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         "forceipv4": True,
         "format": "bestaudio/best",
         "outtmpl": "%(id)s.%(ext)s",
+        "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}}
     }
 
     tmpdir = tempfile.mkdtemp(prefix="pod_asr_")
