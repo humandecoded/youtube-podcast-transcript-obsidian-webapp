@@ -28,6 +28,8 @@ import glob
 import shutil
 import tempfile
 import random
+import logging
+import traceback
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -35,6 +37,14 @@ import requests
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 from yt_dlp import YoutubeDL
+
+# Configure logging
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 
 DEFAULT_LANGS = ["en", "en-US", "en-GB"]
 USER_AGENT = "obsidian-youtube-noter/2.1"
@@ -239,6 +249,152 @@ def _to_raw(obj: Any) -> List[Dict[str, Any]]:
         return []
 
 
+def try_transcript_via_asr(youtube_url: str, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+    """
+    Download audio from YouTube video (yt-dlp) and transcribe locally using faster-whisper.
+    This is a fallback for videos without available transcripts/subtitles.
+    Requires: faster-whisper + ffmpeg, and PODCAST_ASR_ENABLE=1.
+    """
+    asr_enabled = os.getenv("PODCAST_ASR_ENABLE", "0")
+    logger.info(f"ASR transcription attempt for YouTube URL: {youtube_url}")
+    logger.info(f"PODCAST_ASR_ENABLE={asr_enabled}")
+    
+    if asr_enabled != "1":
+        logger.warning("ASR is disabled (PODCAST_ASR_ENABLE != 1)")
+        return None, None
+    
+    try:
+        from faster_whisper import WhisperModel  # type: ignore
+        logger.info("faster-whisper module imported successfully")
+    except ImportError as e:
+        logger.error(f"Failed to import faster-whisper: {str(e)}")
+        logger.error("Make sure faster-whisper is installed: pip install faster-whisper")
+        raise RuntimeError(f"faster-whisper not installed or import failed: {str(e)}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error importing faster-whisper: {str(e)}")
+        logger.debug(traceback.format_exc())
+        raise RuntimeError(f"Unexpected error importing faster-whisper: {str(e)}") from e
+
+    ydl_opts: Dict[str, Any] = {
+        "quiet": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
+        "extractor_retries": 3,
+        "forceipv4": True,
+        "format": "bestaudio/best",
+        "outtmpl": "%(id)s.%(ext)s",
+        "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}},
+    }
+    
+    if use_cookies:
+        cookies_file = os.getenv("YTDLP_COOKIES")
+        if cookies_file and os.path.exists(cookies_file):
+            ydl_opts["cookiefile"] = cookies_file
+    
+    if use_proxy:
+        proxy = _get_random_proxy()
+        if proxy:
+            ydl_opts["proxy"] = proxy
+
+    tmpdir = tempfile.mkdtemp(prefix="yt_asr_")
+    audio_path = None
+    logger.info(f"Created temporary directory: {tmpdir}")
+    
+    try:
+        logger.info("Starting audio download with yt-dlp...")
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=True)
+            video_id = info.get('id')
+            logger.info(f"Audio download completed. Video ID: {video_id}")
+            
+            # Find the downloaded file
+            candidates = glob.glob(os.path.join(os.getcwd(), f"{video_id}.*"))
+            logger.info(f"Found {len(candidates)} audio file candidates: {candidates}")
+            
+            if candidates:
+                audio_path = candidates[0]
+                # Move into tmpdir for cleanup
+                new_path = os.path.join(tmpdir, os.path.basename(audio_path))
+                shutil.move(audio_path, new_path)
+                audio_path = new_path
+                logger.info(f"Audio file moved to: {audio_path}")
+
+        if not audio_path:
+            logger.error("No audio file was downloaded")
+            raise RuntimeError("Audio download failed: no file found after yt-dlp extraction")
+
+        model_name = os.getenv("PODCAST_ASR_MODEL", "base")
+        device = os.getenv("PODCAST_ASR_DEVICE", "cpu")
+        compute_type = os.getenv("PODCAST_ASR_COMPUTE", "int8")
+        beam_size = int(os.getenv("PODCAST_ASR_BEAM_SIZE", "1"))  # Lower beam size = less memory
+        
+        logger.info(f"Initializing Whisper model with: model={model_name}, device={device}, compute_type={compute_type}, beam_size={beam_size}")
+        logger.info("For long videos, consider: model=tiny, compute_type=int8, beam_size=1")
+        
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            logger.info("Whisper model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load Whisper model: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise RuntimeError(f"Failed to load Whisper model '{model_name}' on device '{device}': {str(e)}") from e
+        
+        logger.info(f"Starting transcription of: {audio_path}")
+        try:
+            segments, info = model.transcribe(
+                audio_path, 
+                vad_filter=True,
+                beam_size=beam_size,
+                best_of=1,  # Don't sample multiple completions
+                patience=1.0,  # Don't wait for better results
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=True,
+            )
+            logger.info("Transcription started, processing segments...")
+        except MemoryError as e:
+            logger.error(f"Out of memory during transcription: {str(e)}")
+            raise RuntimeError(
+                f"Out of memory during transcription. Try: "
+                f"1) Use smaller model: PODCAST_ASR_MODEL=tiny, "
+                f"2) Ensure int8: PODCAST_ASR_COMPUTE=int8, "
+                f"3) Reduce beam: PODCAST_ASR_BEAM_SIZE=1, "
+                f"4) Increase Docker/container memory limits"
+            ) from e
+        except Exception as e:
+            logger.error(f"Transcription failed: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise RuntimeError(f"Audio transcription failed during processing: {str(e)}") from e
+        
+        segs_list: List[Dict[str, Any]] = []
+        try:
+            for seg in segments:
+                segs_list.append({
+                    "text": seg.text.strip(),
+                    "start": float(seg.start),
+                    "duration": float(seg.end - seg.start)
+                })
+            logger.info(f"Processed {len(segs_list)} transcript segments")
+        except Exception as e:
+            logger.error(f"Failed to process transcript segments: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise RuntimeError(f"Failed to process transcript segments: {str(e)}") from e
+        
+        text = " ".join(s["text"] for s in segs_list if s.get("text"))
+        logger.info(f"Transcription completed successfully. Text length: {len(text)} characters")
+        return text, segs_list if segs_list else None
+    
+    except Exception as e:
+        logger.error(f"ASR transcription failed: {str(e)}")
+        logger.debug(traceback.format_exc())
+        # Re-raise with context
+        raise
+    finally:
+        logger.info(f"Cleaning up temporary directory: {tmpdir}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[str] = None, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Fetch transcript via NEW youtube-transcript-api instance API (.fetch/.list).
@@ -304,8 +460,32 @@ def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[st
                 except Exception:
                     continue
 
-    # 3) Final fallback: download auto/manual VTT subs via yt-dlp
-    return _fetch_subtitles_via_ytdlp(youtube_url, langs, use_cookies, use_proxy)
+    # 3) Try yt-dlp VTT subs
+    try:
+        logger.info("Attempting to fetch VTT subtitles via yt-dlp...")
+        return _fetch_subtitles_via_ytdlp(youtube_url, langs, use_cookies, use_proxy)
+    except Exception as e:
+        logger.warning(f"VTT subtitle fetch failed: {str(e)}")
+    
+    # 4) Final fallback: download audio and transcribe with faster-whisper
+    logger.info("No transcripts/subtitles available, attempting ASR transcription...")
+    try:
+        text, segments = try_transcript_via_asr(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+        if text and segments:
+            logger.info("ASR transcription successful")
+            return text, segments
+        logger.error("ASR transcription returned empty results")
+    except Exception as e:
+        logger.error(f"ASR transcription failed: {str(e)}")
+        logger.debug(traceback.format_exc())
+    
+    # If we reach here, all methods failed
+    raise RuntimeError(
+        f"Could not obtain transcript for video {video_id}. "
+        "Tried: youtube-transcript-api, yt-dlp VTT subtitles, and ASR transcription. "
+        "Check logs above for specific errors. "
+        "For ASR, ensure PODCAST_ASR_ENABLE=1 and faster-whisper is installed."
+    )
 
 
 # ----------------------------- Summarization (Ollama) -----------------------------
@@ -648,34 +828,66 @@ def process_youtube(
     if not vid:
         raise ValueError("Invalid YouTube URL/ID")
 
+    logger.info(f"Starting YouTube processing for: {youtube_url} (ID: {vid})")
+    logger.info(f"Vault: {vault}, Folder: {folder}, No summary: {no_summary}")
+    logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
+
     # Metadata first (always)
-    meta, proxy_used = fetch_metadata(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+    try:
+        meta, proxy_used = fetch_metadata(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+        logger.info(f"Metadata fetched successfully. Title: {meta.get('title')}")
+    except Exception as e:
+        logger.error(f"Failed to fetch metadata: {str(e)}")
+        raise
 
     # Build note body
     if no_summary:
+        logger.info("Skipping summary generation (no_summary=True)")
         transcript_text: Optional[str] = None
         if include_transcript:
             try:
+                logger.info("Fetching transcript for inclusion...")
                 transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to fetch transcript: {str(e)}")
                 transcript_text = None
         body = make_metadata_only_body(meta, transcript_text=transcript_text)
     else:
-        transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
-        body = ollama_summarize(
-            base_url=ollama_base,
-            model=model,
-            title=meta.get("title") or "",
-            url=meta.get("url") or youtube_url,
-            transcript=transcript_text,
-            context_length=context_length,
-            segments=segments,
-            per_hour=per_hour,
-            segment_duration=segment_duration,
-        )
+        logger.info("Fetching transcript for summarization...")
+        try:
+            transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+            logger.info(f"Transcript fetched. Length: {len(transcript_text)} chars, Segments: {len(segments) if segments else 0}")
+        except Exception as e:
+            logger.error(f"Failed to get transcript: {str(e)}")
+            raise
+        
+        logger.info("Starting summarization...")
+        try:
+            body = ollama_summarize(
+                base_url=ollama_base,
+                model=model,
+                title=meta.get("title") or "",
+                url=meta.get("url") or youtube_url,
+                transcript=transcript_text,
+                context_length=context_length,
+                segments=segments,
+                per_hour=per_hour,
+                segment_duration=segment_duration,
+            )
+            logger.info("Summarization completed successfully")
+        except Exception as e:
+            logger.error(f"Summarization failed: {str(e)}")
+            raise
 
     note_path: Optional[str] = None
     if vault:
-        note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
+        logger.info(f"Writing Obsidian note to vault: {vault}")
+        try:
+            note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
+            logger.info(f"Note written successfully to: {note_path}")
+        except Exception as e:
+            logger.error(f"Failed to write note: {str(e)}")
+            raise
 
+    logger.info("YouTube processing completed successfully")
     return {"meta": meta, "summary": body, "note_path": note_path, "proxy_used": proxy_used}

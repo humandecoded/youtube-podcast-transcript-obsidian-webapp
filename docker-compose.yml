@@ -8,7 +8,7 @@ services:
     depends_on: [redis]
     volumes:
       - type: bind
-        source: /absolute/path/to/your/notes/folder
+        source: /absolute/path/to/your/local/vault
         target: /vault
     command: >
       sh -c "gunicorn -b 0.0.0.0:${PORT:-5050} app:app --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${WEB_TIMEOUT:-600}"
@@ -21,17 +21,25 @@ services:
     depends_on: [redis]
     volumes:
       - type: bind
-        source: /absolute/path/to/your/notes/folder
+        source: /absolute/path/to/your/local/vault
         target: /vault
       # cache HF/CT2 models so downloads happen once
       - models-cache:/root/.cache
+    # Increase memory and CPU for long transcriptions (2+ hours)
+    deploy:
+      resources:
+        limits:
+          memory: 16G  # For very long videos (3-4+ hours)
+          cpus: '6'    # More cores for faster processing
+        reservations:
+          memory: 6G
+          cpus: '3'
     # Option A: Python script worker
     command: >
       sh -c "python worker.py"
     # Option B (RQ CLI): uncomment to use the built-in worker command
     # command: >
     #   sh -c "rq worker -u ${REDIS_URL:-redis://redis:6379/0} ${RQ_QUEUE:-yt}"
-
     extra_hosts: ["host.docker.internal:host-gateway"]
 
   redis:

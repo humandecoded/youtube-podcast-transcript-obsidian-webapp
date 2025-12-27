@@ -47,10 +47,11 @@ except Exception:
 
 # Configure logging
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 
 DEFAULT_LANGS = ["en", "en-US", "en-GB"]
 USER_AGENT = "obsidian-podcast-noter/1.0"
@@ -209,9 +210,10 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         model_name = os.getenv("PODCAST_ASR_MODEL", "base")
         device = os.getenv("PODCAST_ASR_DEVICE", "cpu")
         compute_type = os.getenv("PODCAST_ASR_COMPUTE", "int8")
-        batch_size = int(os.getenv("PODCAST_ASR_BATCH_SIZE", "1"))
+        beam_size = int(os.getenv("PODCAST_ASR_BEAM_SIZE", "1"))  # Lower beam size = less memory
         
-        logger.info(f"Initializing Whisper model with: model={model_name}, device={device}, compute_type={compute_type}, batch_size={batch_size}")
+        logger.info(f"Initializing Whisper model with: model={model_name}, device={device}, compute_type={compute_type}, beam_size={beam_size}")
+        logger.info("For long podcasts, consider: model=tiny, compute_type=int8, beam_size=1")
         
         try:
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
@@ -223,11 +225,27 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         
         logger.info(f"Starting transcription of: {audio_path}")
         try:
-            segments, _ = model.transcribe(
+            segments, info = model.transcribe(
                 audio_path, 
-                vad_filter=True
+                vad_filter=True,
+                beam_size=beam_size,
+                best_of=1,  # Don't sample multiple completions
+                patience=1.0,  # Don't wait for better results
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=True,
             )
             logger.info("Transcription started, processing segments...")
+        except MemoryError as e:
+            logger.error(f"Out of memory during transcription: {str(e)}")
+            raise RuntimeError(
+                f"Out of memory during transcription. Try: "
+                f"1) Use smaller model: PODCAST_ASR_MODEL=tiny, "
+                f"2) Ensure int8: PODCAST_ASR_COMPUTE=int8, "
+                f"3) Reduce beam: PODCAST_ASR_BEAM_SIZE=1, "
+                f"4) Increase Docker/container memory limits"
+            ) from e
         except Exception as e:
             logger.error(f"Transcription failed: {str(e)}")
             logger.debug(traceback.format_exc())
