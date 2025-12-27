@@ -59,6 +59,24 @@ USER_AGENT = "obsidian-podcast-noter/1.0"
 
 # ----------------------------- Utilities -----------------------------
 
+def _get_random_proxy() -> Optional[str]:
+    """Read proxy list file and return a random proxy."""
+    import random
+    proxy_file = os.getenv("YTDLP_PROXY_FILE")
+    if not proxy_file or not os.path.exists(proxy_file):
+        return None
+    
+    try:
+        with open(proxy_file, "r", encoding="utf-8") as f:
+            proxies = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+        
+        if proxies:
+            return random.choice(proxies)
+    except Exception:
+        pass
+    
+    return None
+
 def _now_date_str() -> str:
     tzname = os.getenv("CONSUMED_TZ", "America/Detroit")
     if ZoneInfo:
@@ -85,10 +103,12 @@ def _json_quote(s: str) -> str:
 
 # ----------------------------- Metadata (yt-dlp) -----------------------------
 
-def fetch_podcast_metadata(url: str) -> Dict[str, Any]:
+def fetch_podcast_metadata(url: str, use_cookies: bool = False, use_proxy: bool = False) -> Dict[str, Any]:
     """
     Use yt-dlp to extract episode/page info without downloading audio.
     Works on many host pages (Buzzsprout, Transistor, Spotify/Open, Apple page, etc.)
+    Uses cookies if use_cookies=True and YTDLP_COOKIES (Netscape format) is set in env.
+    Uses proxy if use_proxy=True and YTDLP_PROXY_FILE is set in env.
     """
     logger.info(f"Fetching podcast metadata from URL: {url}")
     ydl_opts = {
@@ -101,6 +121,18 @@ def fetch_podcast_metadata(url: str) -> Dict[str, Any]:
         "forceipv4": True,
         "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}}
     }
+    
+    if use_cookies:
+        cookies_file = os.getenv("YTDLP_COOKIES")
+        if cookies_file and os.path.exists(cookies_file):
+            ydl_opts["cookiefile"] = cookies_file
+            logger.info(f"Using cookies file: {cookies_file}")
+    
+    if use_proxy:
+        proxy = _get_random_proxy()
+        if proxy:
+            ydl_opts["proxy"] = proxy
+            logger.info(f"Using proxy: {proxy}")
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -146,10 +178,12 @@ def _fmt_yyyymmdd(s: Optional[str]) -> Optional[str]:
 
 # ----------------------------- Optional ASR fallback (faster-whisper) -----------------------------
 
-def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+def try_transcript_via_asr(url: str, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     Download audio (yt-dlp) and transcribe locally using faster-whisper.
     Requires: faster-whisper + ffmpeg in your image, and PODCAST_ASR_ENABLE=1.
+    Uses cookies if use_cookies=True and YTDLP_COOKIES (Netscape format) is set in env.
+    Uses proxy if use_proxy=True and YTDLP_PROXY_FILE is set in env.
     """
     asr_enabled = os.getenv("PODCAST_ASR_ENABLE", "0")
     logger.info(f"ASR transcription attempt for URL: {url}")
@@ -181,6 +215,18 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
         "outtmpl": "%(id)s.%(ext)s",
         "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}}
     }
+    
+    if use_cookies:
+        cookies_file = os.getenv("YTDLP_COOKIES")
+        if cookies_file and os.path.exists(cookies_file):
+            ydl_opts["cookiefile"] = cookies_file
+            logger.info(f"Using cookies file for download: {cookies_file}")
+    
+    if use_proxy:
+        proxy = _get_random_proxy()
+        if proxy:
+            ydl_opts["proxy"] = proxy
+            logger.info(f"Using proxy for download: {proxy}")
 
     tmpdir = tempfile.mkdtemp(prefix="pod_asr_")
     audio_path = None
@@ -542,6 +588,8 @@ def process_podcast(
     context_length: int = 15000,
     per_segment: bool = False,
     segment_duration: int = 1800,
+    use_cookies: bool = False,
+    use_proxy: bool = False,
 ) -> Dict[str, Any]:
     """Main entrypoint (mirrors youtube_notes.process_youtube signature).
     
@@ -552,6 +600,8 @@ def process_podcast(
     context_length: Ollama context window size (num_ctx).
     per_segment: If True, create independent summaries for each time segment.
     segment_duration: Duration in seconds for each segment (default: 1800 = 30 minutes).
+    use_cookies: If True, use YTDLP_COOKIES file for authenticated content.
+    use_proxy: If True, use YTDLP_PROXY_FILE for proxy rotation.
     """
     load_dotenv()
 
@@ -562,14 +612,15 @@ def process_podcast(
     model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 
     # 1) Metadata
-    meta = fetch_podcast_metadata(podcast_url)
+    meta = fetch_podcast_metadata(podcast_url, use_cookies=use_cookies, use_proxy=use_proxy)
 
     # 2) Transcript (ASR only - download and transcribe audio)
     logger.info(f"Starting podcast processing for: {podcast_url}")
     logger.info(f"Vault: {vault}, Folder: {folder}, No summary: {no_summary}")
+    logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
     
     try:
-        transcript_text, transcript_segments = try_transcript_via_asr(podcast_url)
+        transcript_text, transcript_segments = try_transcript_via_asr(podcast_url, use_cookies=use_cookies, use_proxy=use_proxy)
     except Exception as e:
         logger.error(f"Transcription failed for {podcast_url}: {str(e)}")
         raise  # Re-raise with original context

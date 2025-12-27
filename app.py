@@ -63,6 +63,8 @@ def podcast():
             context_length=context_length,
             per_segment=request.form.get("per_segment") == "on",
             segment_duration=segment_duration,
+            use_cookies=request.form.get("use_cookies") == "on",
+            use_proxy=request.form.get("use_proxy") == "on",
         ),
         description=f"Podcast→Obsidian for {url}",
         result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
