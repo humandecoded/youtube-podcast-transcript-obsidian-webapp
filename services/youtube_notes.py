@@ -249,6 +249,106 @@ def _to_raw(obj: Any) -> List[Dict[str, Any]]:
         return []
 
 
+# ----------------------------- ASR fallback (faster-whisper) -----------------------------
+
+def _transcribe_in_chunks(audio_path: str, chunk_duration: int, tmpdir: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Split audio into chunks and transcribe each separately to avoid OOM on very long files.
+    Returns combined transcript text and segments.
+    """
+    import subprocess
+    from faster_whisper import WhisperModel  # type: ignore
+    
+    logger.info(f"Starting chunked transcription with {chunk_duration}s chunks")
+    
+    model_name = os.getenv("PODCAST_ASR_MODEL", "base")
+    device = os.getenv("PODCAST_ASR_DEVICE", "cpu")
+    compute_type = os.getenv("PODCAST_ASR_COMPUTE", "int8")
+    beam_size = int(os.getenv("PODCAST_ASR_BEAM_SIZE", "1"))
+    
+    logger.info(f"Loading Whisper model: {model_name}")
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    
+    all_segments: List[Dict[str, Any]] = []
+    chunk_num = 0
+    current_offset = 0.0
+    
+    while True:
+        chunk_num += 1
+        chunk_path = os.path.join(tmpdir, f"chunk_{chunk_num}.wav")
+        
+        logger.info(f"Extracting chunk {chunk_num} starting at {current_offset}s")
+        
+        # Extract chunk using ffmpeg
+        cmd = [
+            'ffmpeg', '-y', '-i', audio_path,
+            '-ss', str(current_offset),
+            '-t', str(chunk_duration),
+            '-ar', '16000',  # Whisper expects 16kHz
+            '-ac', '1',  # Mono
+            '-c:a', 'pcm_s16le',  # PCM encoding
+            chunk_path
+        ]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg chunk extraction failed: {result.stderr}")
+                break
+            
+            # Check if chunk was created and has content
+            if not os.path.exists(chunk_path) or os.path.getsize(chunk_path) < 1000:
+                logger.info("No more audio to process")
+                break
+                
+        except Exception as e:
+            logger.error(f"Failed to extract chunk: {str(e)}")
+            break
+        
+        # Transcribe chunk
+        logger.info(f"Transcribing chunk {chunk_num}...")
+        try:
+            segments, _ = model.transcribe(
+                chunk_path,
+                vad_filter=True,
+                beam_size=beam_size,
+                best_of=1,
+                patience=1.0,
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=False,  # Each chunk is independent
+            )
+            
+            chunk_segs = []
+            for seg in segments:
+                chunk_segs.append({
+                    "text": seg.text.strip(),
+                    "start": float(seg.start) + current_offset,  # Add offset for correct timestamp
+                    "duration": float(seg.end - seg.start)
+                })
+            
+            all_segments.extend(chunk_segs)
+            logger.info(f"Chunk {chunk_num}: processed {len(chunk_segs)} segments")
+            
+        except Exception as e:
+            logger.error(f"Failed to transcribe chunk {chunk_num}: {str(e)}")
+            logger.debug(traceback.format_exc())
+            # Continue with next chunk instead of failing completely
+        finally:
+            # Clean up chunk file to save space
+            try:
+                os.remove(chunk_path)
+            except:
+                pass
+        
+        current_offset += chunk_duration
+    
+    logger.info(f"Chunked transcription complete. Total segments: {len(all_segments)}")
+    text = " ".join(s["text"] for s in all_segments if s.get("text"))
+    return text, all_segments if all_segments else None
+
+
 def try_transcript_via_asr(youtube_url: str, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     Download audio from YouTube video (yt-dlp) and transcribe locally using faster-whisper.
@@ -322,6 +422,27 @@ def try_transcript_via_asr(youtube_url: str, use_cookies: bool = False, use_prox
         if not audio_path:
             logger.error("No audio file was downloaded")
             raise RuntimeError("Audio download failed: no file found after yt-dlp extraction")
+
+        # Get audio duration to decide on chunking strategy
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            duration_seconds = float(result.stdout.strip()) if result.stdout.strip() else 0
+            logger.info(f"Audio duration: {duration_seconds:.1f} seconds ({duration_seconds/3600:.1f} hours)")
+        except Exception as e:
+            logger.warning(f"Could not determine audio duration: {str(e)}")
+            duration_seconds = 0
+
+        # For very long files (>2 hours), use chunked processing to avoid OOM
+        max_chunk_duration = int(os.getenv("ASR_CHUNK_DURATION", "3600"))  # Default: 1 hour chunks
+        if duration_seconds > 7200:  # > 2 hours
+            logger.info(f"Long audio detected ({duration_seconds/3600:.1f}h). Using chunked transcription with {max_chunk_duration}s chunks")
+            return _transcribe_in_chunks(audio_path, max_chunk_duration, tmpdir)
 
         model_name = os.getenv("PODCAST_ASR_MODEL", "base")
         device = os.getenv("PODCAST_ASR_DEVICE", "cpu")
