@@ -29,6 +29,8 @@ import json
 import glob
 import shutil
 import tempfile
+import logging
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
@@ -42,6 +44,13 @@ try:
     from zoneinfo import ZoneInfo  # py3.9+
 except Exception:
     ZoneInfo = None
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 DEFAULT_LANGS = ["en", "en-US", "en-GB"]
 USER_AGENT = "obsidian-podcast-noter/1.0"
@@ -80,6 +89,7 @@ def fetch_podcast_metadata(url: str) -> Dict[str, Any]:
     Use yt-dlp to extract episode/page info without downloading audio.
     Works on many host pages (Buzzsprout, Transistor, Spotify/Open, Apple page, etc.)
     """
+    logger.info(f"Fetching podcast metadata from URL: {url}")
     ydl_opts = {
         "quiet": True,
         "skip_download": True,
@@ -90,8 +100,13 @@ def fetch_podcast_metadata(url: str) -> Dict[str, Any]:
         "forceipv4": True,
     }
 
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        logger.error(f"Failed to fetch metadata from {url}: {str(e)}")
+        logger.debug(traceback.format_exc())
+        raise RuntimeError(f"Failed to fetch podcast metadata: {str(e)}") from e
 
     # Try to infer show name
     show = info.get("uploader") or info.get("artist") or info.get("album") or info.get("channel")
@@ -134,12 +149,25 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
     Download audio (yt-dlp) and transcribe locally using faster-whisper.
     Requires: faster-whisper + ffmpeg in your image, and PODCAST_ASR_ENABLE=1.
     """
-    if os.getenv("PODCAST_ASR_ENABLE", "0") != "1":
+    asr_enabled = os.getenv("PODCAST_ASR_ENABLE", "0")
+    logger.info(f"ASR transcription attempt for URL: {url}")
+    logger.info(f"PODCAST_ASR_ENABLE={asr_enabled}")
+    
+    if asr_enabled != "1":
+        logger.warning("ASR is disabled (PODCAST_ASR_ENABLE != 1)")
         return None, None
+    
     try:
         from faster_whisper import WhisperModel  # type: ignore
-    except Exception:
-        return None, None
+        logger.info("faster-whisper module imported successfully")
+    except ImportError as e:
+        logger.error(f"Failed to import faster-whisper: {str(e)}")
+        logger.error("Make sure faster-whisper is installed: pip install faster-whisper")
+        raise RuntimeError(f"faster-whisper not installed or import failed: {str(e)}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error importing faster-whisper: {str(e)}")
+        logger.debug(traceback.format_exc())
+        raise RuntimeError(f"Unexpected error importing faster-whisper: {str(e)}") from e
 
     ydl_opts: Dict[str, Any] = {
         "quiet": True,
@@ -153,44 +181,82 @@ def try_transcript_via_asr(url: str) -> Tuple[Optional[str], Optional[List[Dict[
 
     tmpdir = tempfile.mkdtemp(prefix="pod_asr_")
     audio_path = None
+    logger.info(f"Created temporary directory: {tmpdir}")
+    
     try:
+        logger.info("Starting audio download with yt-dlp...")
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            video_id = info.get('id')
+            logger.info(f"Audio download completed. Video ID: {video_id}")
+            
             # choose the downloaded file
-            candidates = glob.glob(os.path.join(os.getcwd(), f"{info.get('id')}.*"))
+            candidates = glob.glob(os.path.join(os.getcwd(), f"{video_id}.*"))
+            logger.info(f"Found {len(candidates)} audio file candidates: {candidates}")
+            
             if candidates:
                 audio_path = candidates[0]
                 # move into tmpdir for cleanup
                 new_path = os.path.join(tmpdir, os.path.basename(audio_path))
                 shutil.move(audio_path, new_path)
                 audio_path = new_path
+                logger.info(f"Audio file moved to: {audio_path}")
 
         if not audio_path:
-            return None, None
+            logger.error("No audio file was downloaded")
+            raise RuntimeError("Audio download failed: no file found after yt-dlp extraction")
 
-        model_name = os.getenv("PODCAST_ASR_MODEL")
-        device = os.getenv("PODCAST_ASR_DEVICE")
-        compute_type = os.getenv("PODCAST_ASR_COMPUTE")
+        model_name = os.getenv("PODCAST_ASR_MODEL", "base")
+        device = os.getenv("PODCAST_ASR_DEVICE", "cpu")
+        compute_type = os.getenv("PODCAST_ASR_COMPUTE", "int8")
         batch_size = int(os.getenv("PODCAST_ASR_BATCH_SIZE", "1"))
         
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        segments, _ = model.transcribe(
-            audio_path, 
-            vad_filter=True,
-            batch_size=batch_size
-        )
+        logger.info(f"Initializing Whisper model with: model={model_name}, device={device}, compute_type={compute_type}, batch_size={batch_size}")
+        
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            logger.info("Whisper model loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load Whisper model: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise RuntimeError(f"Failed to load Whisper model '{model_name}' on device '{device}': {str(e)}") from e
+        
+        logger.info(f"Starting transcription of: {audio_path}")
+        try:
+            segments, _ = model.transcribe(
+                audio_path, 
+                vad_filter=True
+            )
+            logger.info("Transcription started, processing segments...")
+        except Exception as e:
+            logger.error(f"Transcription failed: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise RuntimeError(f"Audio transcription failed during processing: {str(e)}") from e
         segs_list: List[Dict[str, Any]] = []
-        for seg in segments:
-            segs_list.append({
-                "text": seg.text.strip(),
-                "start": float(seg.start),
-                "duration": float(seg.end - seg.start)
-            })
+        try:
+            for seg in segments:
+                segs_list.append({
+                    "text": seg.text.strip(),
+                    "start": float(seg.start),
+                    "duration": float(seg.end - seg.start)
+                })
+            logger.info(f"Processed {len(segs_list)} transcript segments")
+        except Exception as e:
+            logger.error(f"Failed to process transcript segments: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise RuntimeError(f"Failed to process transcript segments: {str(e)}") from e
+        
         text = " ".join(s["text"] for s in segs_list if s.get("text"))
+        logger.info(f"Transcription completed successfully. Text length: {len(text)} characters")
         return text, segs_list if segs_list else None
-    except Exception:
-        return None, None
+    
+    except Exception as e:
+        logger.error(f"ASR transcription failed: {str(e)}")
+        logger.debug(traceback.format_exc())
+        # Re-raise with context
+        raise
     finally:
+        logger.info(f"Cleaning up temporary directory: {tmpdir}")
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -302,7 +368,11 @@ def call_ollama_any(base_url: str, model: str, prompt: str, context_length: int 
 
 
 def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, segments: Optional[List[Dict[str, Any]]] = None, context_length: int=15000, per_segment: bool=False, segment_duration: int=1800) -> str:
+    logger.info(f"Starting Ollama summarization. Base URL: {base_url}, Model: {model}")
+    logger.info(f"Transcript length: {len(transcript)} characters, Per-segment: {per_segment}")
+    
     if not _check_ollama(base_url):
+        logger.error(f"Ollama server check failed at {base_url}")
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
 
     SYS = (
@@ -327,13 +397,17 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
     # Per-segment mode: independent summaries for each time segment
     if per_segment and segments:
         time_chunks = chunk_segments_by_duration(segments, duration_seconds=segment_duration)
+        logger.info(f"Created {len(time_chunks)} time-based chunks for summarization")
+        
         if not time_chunks:
+            logger.warning("No time chunks created from segments")
             return "# Summary\n\n_(No content to summarize)_"
         
         result_parts: List[str] = []
         for i, (chunk_text, start_sec, end_sec) in enumerate(time_chunks, 1):
             start_hms = fmt_hms(int(start_sec))
             end_hms = fmt_hms(int(end_sec))
+            logger.info(f"Summarizing segment {i}/{len(time_chunks)}: {start_hms} - {end_hms}")
             
             segment_prompt = (
                 f"{SYS}\n\nSummarize this portion of a podcast episode.\n"
@@ -471,30 +545,57 @@ def process_podcast(
     meta = fetch_podcast_metadata(podcast_url)
 
     # 2) Transcript (ASR only - download and transcribe audio)
-    transcript_text, transcript_segments = try_transcript_via_asr(podcast_url)
+    logger.info(f"Starting podcast processing for: {podcast_url}")
+    logger.info(f"Vault: {vault}, Folder: {folder}, No summary: {no_summary}")
+    
+    try:
+        transcript_text, transcript_segments = try_transcript_via_asr(podcast_url)
+    except Exception as e:
+        logger.error(f"Transcription failed for {podcast_url}: {str(e)}")
+        raise  # Re-raise with original context
 
     # 3) Body
     if no_summary:
+        logger.info("Skipping summary generation (no_summary=True)")
         body = make_metadata_only_body(meta, transcript_text if include_transcript else None)
     else:
         if not transcript_text:
-            raise RuntimeError("Audio transcription failed. Ensure PODCAST_ASR_ENABLE=1 and faster-whisper is installed.")
-        body = summarize_with_ollama(
-            base_url=ollama_base,
-            model=model,
-            title=meta.get("episode_title") or "",
-            show=meta.get("show") or "",
-            url=meta.get("url") or podcast_url,
-            transcript=transcript_text,
-            segments=transcript_segments,
-            context_length=context_length,
-            per_segment=per_segment,
-            segment_duration=segment_duration,
-        )
+            logger.error("No transcript text available for summarization")
+            raise RuntimeError(
+                "Audio transcription failed. No transcript text was generated. "
+                "Check the logs above for specific errors. "
+                "Ensure PODCAST_ASR_ENABLE=1 and faster-whisper is installed."
+            )
+        try:
+            body = summarize_with_ollama(
+                base_url=ollama_base,
+                model=model,
+                title=meta.get("episode_title") or "",
+                show=meta.get("show") or "",
+                url=meta.get("url") or podcast_url,
+                transcript=transcript_text,
+                segments=transcript_segments,
+                context_length=context_length,
+                per_segment=per_segment,
+                segment_duration=segment_duration,
+            )
+            logger.info("Summarization completed successfully")
+        except Exception as e:
+            logger.error(f"Summarization failed: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise
 
     # 4) Write note
     note_path = None
     if vault:
-        note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
+        logger.info(f"Writing Obsidian note to vault: {vault}")
+        try:
+            note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
+            logger.info(f"Note written successfully to: {note_path}")
+        except Exception as e:
+            logger.error(f"Failed to write note: {str(e)}")
+            logger.debug(traceback.format_exc())
+            raise
 
+    logger.info("Podcast processing completed successfully")
     return {"meta": meta, "summary": body, "note_path": note_path}
