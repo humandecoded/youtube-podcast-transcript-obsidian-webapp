@@ -20,6 +20,10 @@ q = Queue(queue_name, connection=redis_conn, default_timeout=int(os.getenv("RQ_J
 
 @app.get("/")
 def index():
+    # Import here to get the defaults after env is loaded
+    from services.youtube_notes import DEFAULT_SYSTEM_PROMPT, DEFAULT_SUMMARY_PROMPT, DEFAULT_SEGMENT_PROMPT
+    from services.podcast_notes import DEFAULT_PODCAST_SUMMARY_PROMPT, DEFAULT_PODCAST_SEGMENT_PROMPT
+    
     return render_template("index.html", defaults={
         "vault": os.getenv("OBSIDIAN_VAULT", ""),
         "folder": os.getenv("OBSIDIAN_FOLDER", ""),
@@ -27,6 +31,11 @@ def index():
         "ollama_base": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         "model": os.getenv("OLLAMA_MODEL", "llama3.1:8b"),
         "context_length": os.getenv("OLLAMA_CONTEXT_LENGTH", "4096"),
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+        "youtube_summary_prompt": DEFAULT_SUMMARY_PROMPT,
+        "youtube_segment_prompt": DEFAULT_SEGMENT_PROMPT,
+        "podcast_summary_prompt": DEFAULT_PODCAST_SUMMARY_PROMPT,
+        "podcast_segment_prompt": DEFAULT_PODCAST_SEGMENT_PROMPT,
     })
 
 @app.post("/podcast")
@@ -49,6 +58,10 @@ def podcast():
     except Exception:
         segment_duration = 1800
     
+    system_prompt = (request.form.get("system_prompt") or "").strip() or None
+    summary_prompt = (request.form.get("summary_prompt") or "").strip() or None
+    segment_prompt = (request.form.get("segment_prompt") or "").strip() or None
+    
     job = q.enqueue(
         process_podcast,
         args=(url,),
@@ -65,6 +78,9 @@ def podcast():
             segment_duration=segment_duration,
             use_cookies=request.form.get("use_cookies") == "on",
             use_proxy=request.form.get("use_proxy") == "on",
+            system_prompt=system_prompt,
+            summary_prompt=summary_prompt,
+            segment_prompt=segment_prompt,
         ),
         description=f"Podcast→Obsidian for {url}",
         result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
@@ -90,6 +106,9 @@ def summarize():
     use_cookies = request.form.get("use_cookies") == "on"
     use_proxy = request.form.get("use_proxy") == "on"
     per_hour = request.form.get("per_hour") == "on"
+    system_prompt = (request.form.get("system_prompt") or "").strip() or None
+    summary_prompt = (request.form.get("summary_prompt") or "").strip() or None
+    segment_prompt = (request.form.get("segment_prompt") or "").strip() or None
 
     # Get context length from form, default to 4096 if not provided or invalid
     try:
@@ -124,6 +143,9 @@ def summarize():
             "segment_duration": segment_duration,
             "per_hour": per_hour,
             "use_cookies": use_cookies,
+            "system_prompt": system_prompt,
+            "summary_prompt": summary_prompt,
+            "segment_prompt": segment_prompt,
         },
         description=f"YouTube→Obsidian for {url}",
         url=url,

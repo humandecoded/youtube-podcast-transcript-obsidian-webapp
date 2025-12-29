@@ -56,6 +56,39 @@ if not logger.handlers:
 DEFAULT_LANGS = ["en", "en-US", "en-GB"]
 USER_AGENT = "obsidian-podcast-noter/1.0"
 
+# Default prompts for Ollama summarization (can be overridden via .env)
+DEFAULT_SYSTEM_PROMPT = os.getenv(
+    "OLLAMA_SYSTEM_PROMPT",
+    "You are a precise note-taker creating concise, accurate summaries for Obsidian. "
+    "Prefer structured Markdown with headings, bullet points, and short quotes. "
+    "Base everything only on the transcript; do not invent facts."
+)
+
+DEFAULT_PODCAST_SUMMARY_PROMPT = os.getenv(
+    "PODCAST_SUMMARY_PROMPT",
+    "You will summarize a podcast transcript.\n"
+    "Show: {show}\nTitle: {title}\nURL: {url}\n\n"
+    "Provide a well-structured Markdown summary with:\n"
+    "# Summary\n1–3 paragraph executive summary.\n\n"
+    "## Key Points\n- Bulleted list of the most important takeaways.\n\n"
+    "## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
+    "## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
+    "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps.\n\n"
+    'Transcript:\n"""{transcript}"""'
+)
+
+DEFAULT_PODCAST_SEGMENT_PROMPT = os.getenv(
+    "PODCAST_SEGMENT_PROMPT",
+    "Summarize this portion of a podcast episode.\n"
+    "Show: {show}\nTitle: {title}\nURL: {url}\n"
+    "Time Range: {start_hms} - {end_hms}\n\n"
+    "Provide a concise summary with:\n"
+    "- Main topics discussed\n"
+    "- Key points and takeaways\n"
+    "- Notable quotes (if any)\n\n"
+    'Transcript:\n"""{transcript}"""'
+)
+
 
 # ----------------------------- Utilities -----------------------------
 
@@ -552,7 +585,7 @@ def call_ollama_any(base_url: str, model: str, prompt: str, context_length: int 
     raise RuntimeError(f"Ollama API not responding at {base_url}.")
 
 
-def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, segments: Optional[List[Dict[str, Any]]] = None, context_length: int=15000, per_segment: bool=False, segment_duration: int=1800) -> str:
+def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url: str, transcript: str, segments: Optional[List[Dict[str, Any]]] = None, context_length: int=15000, per_segment: bool=False, segment_duration: int=1800, system_prompt: Optional[str] = None, summary_prompt: Optional[str] = None, segment_prompt: Optional[str] = None) -> str:
     logger.info(f"Starting Ollama summarization. Base URL: {base_url}, Model: {model}")
     logger.info(f"Transcript length: {len(transcript)} characters, Per-segment: {per_segment}")
     
@@ -560,23 +593,16 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
         logger.error(f"Ollama server check failed at {base_url}")
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
 
-    SYS = (
-        "You are a precise note-taker creating concise, accurate summaries for Obsidian. "
-        "Prefer structured Markdown with headings, bullet points, and short quotes. "
-        "Base everything only on the transcript; do not invent facts."
-    )
+    # Use provided prompts or defaults
+    sys_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+    sum_prompt = summary_prompt or DEFAULT_PODCAST_SUMMARY_PROMPT
+    seg_prompt = segment_prompt or DEFAULT_PODCAST_SEGMENT_PROMPT
 
     def full_prompt(text: str) -> str:
+        # Use summary prompt with system prompt prepended
         return (
-            f"{SYS}\n\nYou will summarize a podcast transcript.\n"
-            f"Show: {show}\nTitle: {title}\nURL: {url}\n\n"
-            f"Provide a well-structured Markdown summary with:\n"
-            f"# Summary\n1–3 paragraph executive summary.\n\n"
-            f"## Key Points\n- Bulleted list of the most important takeaways.\n\n"
-            f"## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
-            f"## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
-            f"## Memorable Quotes\n- Short quotes (≤20 words) with timestamps.\n\n"
-            f'Transcript:\n"""' + text + '"""'
+            sys_prompt + "\n\n" +
+            sum_prompt.format(show=show, title=title, url=url, transcript=text)
         )
 
     # Per-segment mode: independent summaries for each time segment
@@ -594,18 +620,15 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
             end_hms = fmt_hms(int(end_sec))
             logger.info(f"Summarizing segment {i}/{len(time_chunks)}: {start_hms} - {end_hms}")
             
-            segment_prompt = (
-                f"{SYS}\n\nSummarize this portion of a podcast episode.\n"
-                f"Show: {show}\nTitle: {title}\nURL: {url}\n"
-                f"Time Range: {start_hms} - {end_hms}\n\n"
-                f"Provide a concise summary with:\n"
-                f"- Main topics discussed\n"
-                f"- Key points and takeaways\n"
-                f"- Notable quotes (if any)\n\n"
-                f'Transcript:\n"""' + chunk_text + '"""'
+            # Use segment prompt with system prompt prepended
+            segment_prompt_text = (
+                sys_prompt + "\n\n" +
+                seg_prompt.format(
+                    show=show, title=title, url=url, start_hms=start_hms, end_hms=end_hms, transcript=chunk_text
+                )
             )
             
-            summary = call_ollama_any(base_url, model, segment_prompt, context_length)
+            summary = call_ollama_any(base_url, model, segment_prompt_text, context_length)
             result_parts.append(f"## Segment {i}: {start_hms} - {end_hms}\n\n{summary}")
         
         return "# Summary\n\n" + "\n\n".join(result_parts)
@@ -709,6 +732,9 @@ def process_podcast(
     segment_duration: int = 1800,
     use_cookies: bool = False,
     use_proxy: bool = False,
+    system_prompt: Optional[str] = None,
+    summary_prompt: Optional[str] = None,
+    segment_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Main entrypoint (mirrors youtube_notes.process_youtube signature).
     
@@ -721,6 +747,9 @@ def process_podcast(
     segment_duration: Duration in seconds for each segment (default: 1800 = 30 minutes).
     use_cookies: If True, use YTDLP_COOKIES file for authenticated content.
     use_proxy: If True, use YTDLP_PROXY_FILE for proxy rotation.
+    system_prompt: Optional system prompt (prepended to all prompts).
+    summary_prompt: Optional full summary prompt template.
+    segment_prompt: Optional segment prompt template.
     """
     load_dotenv()
 

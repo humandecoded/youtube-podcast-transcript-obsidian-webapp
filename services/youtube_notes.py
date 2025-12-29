@@ -49,6 +49,39 @@ if not logger.handlers:
 DEFAULT_LANGS = ["en", "en-US", "en-GB"]
 USER_AGENT = "obsidian-youtube-noter/2.1"
 
+# Default prompts for Ollama summarization (can be overridden via .env)
+DEFAULT_SYSTEM_PROMPT = os.getenv(
+    "OLLAMA_SYSTEM_PROMPT",
+    "You are a precise note-taker creating concise, accurate summaries for Obsidian. "
+    "Prefer structured Markdown with headings, bullet points, and short quotes. "
+    "Base everything only on the transcript; do not invent facts."
+)
+
+DEFAULT_SUMMARY_PROMPT = os.getenv(
+    "YOUTUBE_SUMMARY_PROMPT",
+    "You will summarize a YouTube transcript.\n"
+    "Title: {title}\nURL: {url}\n\n"
+    "Provide a well-structured Markdown summary with:\n"
+    "# Summary\n1–3 paragraph executive summary.\n\n"
+    "## Key Points\n- Bulleted list of the most important takeaways.\n\n"
+    "## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
+    "## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
+    "## Memorable Quotes\n- Short quotes (≤20 words) with timestamps.\n\n"
+    'Transcript:\n"""{transcript}"""'
+)
+
+DEFAULT_SEGMENT_PROMPT = os.getenv(
+    "YOUTUBE_SEGMENT_PROMPT",
+    "Summarize this portion of a YouTube stream/video.\n"
+    "Title: {title}\nURL: {url}\n"
+    "Time Range: {start_hms} - {end_hms}\n\n"
+    "Provide a concise summary with:\n"
+    "- Main topics discussed\n"
+    "- Key points and takeaways\n"
+    "- Notable quotes (if any)\n\n"
+    'Transcript:\n"""{transcript}"""'
+)
+
 
 # ----------------------------- URL & metadata -----------------------------
 
@@ -450,6 +483,9 @@ def ollama_summarize(
     segments: Optional[List[Dict[str, Any]]] = None,
     per_hour: bool = False,
     segment_duration: int = 3600,
+    system_prompt: Optional[str] = None,
+    summary_prompt: Optional[str] = None,
+    segment_prompt: Optional[str] = None,
 ) -> str:
     """Summarize the transcript with a local Ollama model.
     
@@ -457,27 +493,23 @@ def ollama_summarize(
         per_hour: If True, create independent summaries for each time segment.
                  Requires segments parameter.
         segment_duration: Duration in seconds for each segment (default: 3600 = 1 hour).
+        system_prompt: Optional system prompt (prepended to all prompts).
+        summary_prompt: Optional full summary prompt template.
+        segment_prompt: Optional segment prompt template.
     """
     if not _check_ollama(base_url):
         raise RuntimeError(f"{base_url} does not look like an Ollama server (/api/tags not OK).")
 
-    SYS = (
-        "You are a precise note-taker creating concise, accurate summaries for Obsidian. "
-        "Prefer structured Markdown with headings, bullet points, and short quotes. "
-        "Base everything only on the transcript; do not invent facts."
-    )
+    # Use provided prompts or defaults
+    sys_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+    sum_prompt = summary_prompt or DEFAULT_SUMMARY_PROMPT
+    seg_prompt = segment_prompt or DEFAULT_SEGMENT_PROMPT
 
     def full_prompt(text: str) -> str:
+        # Use summary prompt with system prompt prepended
         return (
-            f"{SYS}\n\nYou will summarize a YouTube transcript.\n"
-            f"Title: {title}\nURL: {url}\n\n"
-            f"Provide a well-structured Markdown summary with:\n"
-            f"# Summary\n1–3 paragraph executive summary.\n\n"
-            f"## Key Points\n- Bulleted list of the most important takeaways.\n\n"
-            f"## Details & Timestamps\n- Group related bullets; include timestamps when available.\n\n"
-            f"## Action Items / How-To (if applicable)\n- Steps or recommendations.\n\n"
-            f"## Memorable Quotes\n- Short quotes (≤20 words) with timestamps.\n\n"
-            f'Transcript:\n"""' + text + '"""'
+            sys_prompt + "\n\n" +
+            sum_prompt.format(title=title, url=url, transcript=text)
         )
 
     # Per-hour mode: independent summaries for each time segment
@@ -491,18 +523,15 @@ def ollama_summarize(
             start_hms = fmt_hms(int(start_sec))
             end_hms = fmt_hms(int(end_sec))
             
-            segment_prompt = (
-                f"{SYS}\n\nSummarize this portion of a YouTube stream/video.\n"
-                f"Title: {title}\nURL: {url}\n"
-                f"Time Range: {start_hms} - {end_hms}\n\n"
-                f"Provide a concise summary with:\n"
-                f"- Main topics discussed\n"
-                f"- Key points and takeaways\n"
-                f"- Notable quotes (if any)\n\n"
-                f'Transcript:\n"""' + chunk_text + '"""'
+            # Use segment prompt with system prompt prepended
+            segment_prompt_text = (
+                sys_prompt + "\n\n" +
+                seg_prompt.format(
+                    title=title, url=url, start_hms=start_hms, end_hms=end_hms, transcript=chunk_text
+                )
             )
             
-            summary = call_ollama_any(base_url, model, segment_prompt, context_length)
+            summary = call_ollama_any(base_url, model, segment_prompt_text, context_length)
             result_parts.append(f"## Segment {i}: {start_hms} - {end_hms}\n\n{summary}")
         
         return "# Summary\n\n" + "\n\n".join(result_parts)
@@ -635,6 +664,9 @@ def process_youtube(
     context_length: int = 4096,
     per_hour: bool = False,
     segment_duration: int = 3600,
+    system_prompt: Optional[str] = None,
+    summary_prompt: Optional[str] = None,
+    segment_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Main entrypoint used by Flask/RQ.
 
@@ -704,6 +736,9 @@ def process_youtube(
                 segments=segments,
                 per_hour=per_hour,
                 segment_duration=segment_duration,
+                system_prompt=system_prompt,
+                summary_prompt=summary_prompt,
+                segment_prompt=segment_prompt,
             )
             logger.info("Summarization completed successfully")
         except Exception as e:

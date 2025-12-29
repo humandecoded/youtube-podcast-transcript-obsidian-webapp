@@ -28,6 +28,21 @@
 <input type="number" id="yt_segment_duration" name="segment_duration" value="3600" min="60" max="7200" step="60">
 <small>Duration for each segment when using per-time summaries (3600 = 1 hour)</small>
 </div>
+<div class="form-group">
+<label for="yt_system_prompt">System Prompt:</label>
+<textarea id="yt_system_prompt" name="system_prompt" rows="3">{{ defaults.system_prompt }}</textarea>
+<small>Sets the overall behavior for the AI (prepended to all prompts)</small>
+</div>
+<div class="form-group">
+<label for="yt_summary_prompt">Full Summary Prompt:</label>
+<textarea id="yt_summary_prompt" name="summary_prompt" rows="6">{{ defaults.youtube_summary_prompt }}</textarea>
+<small>Used for complete transcript summary. Supports: {title}, {url}, {transcript}</small>
+</div>
+<div class="form-group">
+<label for="yt_segment_prompt">Per-Hour Segment Prompt:</label>
+<textarea id="yt_segment_prompt" name="segment_prompt" rows="4">{{ defaults.youtube_segment_prompt }}</textarea>
+<small>Used when per-hour mode is enabled. Supports: {title}, {url}, {start_hms}, {end_hms}, {transcript}</small>
+</div>
 <label><input type="checkbox" name="no_summary"> Metadata only (for just setting up a note)</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
 <label><input type="checkbox" name="use_cookies"> 🍪 Use cookies file for age-gated videos</label>
@@ -64,6 +79,21 @@
 <label for="podcast_segment_duration">Segment duration (seconds):</label>
 <input type="number" id="podcast_segment_duration" name="segment_duration" value="1800" min="60" max="7200" step="60">
 <small>Duration for each segment when using per-time summaries (3600 = 1 hour)</small>
+</div>
+<div class="form-group">
+<label for="podcast_system_prompt">System Prompt:</label>
+<textarea id="podcast_system_prompt" name="system_prompt" rows="3">{{ defaults.system_prompt }}</textarea>
+<small>Sets the overall behavior for the AI (prepended to all prompts)</small>
+</div>
+<div class="form-group">
+<label for="podcast_summary_prompt">Full Summary Prompt:</label>
+<textarea id="podcast_summary_prompt" name="summary_prompt" rows="6">{{ defaults.podcast_summary_prompt }}</textarea>
+<small>Used for complete transcript summary. Supports: {show}, {title}, {url}, {transcript}</small>
+</div>
+<div class="form-group">
+<label for="podcast_segment_prompt">Per-Segment Prompt:</label>
+<textarea id="podcast_segment_prompt" name="segment_prompt" rows="4">{{ defaults.podcast_segment_prompt }}</textarea>
+<small>Used when per-segment mode is enabled. Supports: {show}, {title}, {url}, {start_hms}, {end_hms}, {transcript}</small>
 </div>
 <label><input type="checkbox" name="no_summary"> Metadata only (for just setting up a note)</label>
 <label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
