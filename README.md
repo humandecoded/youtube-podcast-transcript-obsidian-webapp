@@ -19,7 +19,7 @@ A Flask web application that automatically generates structured Markdown notes f
 1. **Clone the repository**:
   
 
-2. **Configure `.env` file**:
+2. **Copy `.env.example` to `.env` and configure `.env` file**:
    
    Open the `.env` file, then update these critical values:
    
@@ -33,8 +33,8 @@ A Flask web application that automatically generates structured Markdown notes f
    # Change to your preferred model
    OLLAMA_MODEL=llama3.1:8b
    
-   # For podcast transcription - set to 1 to enable
-   PODCAST_ASR_ENABLE=1
+   # Set default folder to save note to. Your actual vault path is set in docker-compose file 
+   OBSIDIAN_FOLDER=youtube
    ```
 
 3. **Configure `docker-compose.yml`**:
