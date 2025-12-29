@@ -145,7 +145,8 @@ def fetch_podcast_metadata(url: str, use_cookies: bool = False, use_proxy: bool 
     """
     logger.info(f"Fetching podcast metadata from URL: {url}")
     ydl_opts = {
-        "quiet": True,
+        "verbose": True,
+        "no_warnings": False,
         "skip_download": True,
         "noplaylist": True,
         "nocheckcertificate": True,
@@ -336,14 +337,31 @@ def try_transcript_via_asr(url: str, use_cookies: bool = False, use_proxy: bool 
         logger.debug(traceback.format_exc())
         raise RuntimeError(f"Unexpected error importing faster-whisper: {str(e)}") from e
 
+    def progress_hook(d):
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+            downloaded = d.get('downloaded_bytes', 0)
+            speed = d.get('speed', 0)
+            eta = d.get('eta', 0)
+            if total:
+                percent = (downloaded / total) * 100
+                logger.info(f"Download progress: {percent:.1f}% ({downloaded}/{total} bytes) Speed: {speed/1024:.1f} KB/s ETA: {eta}s")
+            else:
+                logger.info(f"Download progress: {downloaded} bytes downloaded, Speed: {speed/1024:.1f} KB/s")
+        elif d['status'] == 'finished':
+            logger.info(f"Download finished: {d.get('filename')}")
+
     ydl_opts: Dict[str, Any] = {
-        "quiet": True,
+        "verbose": True,
+        "no_warnings": False,
         "noplaylist": True,
         "nocheckcertificate": True,
         "extractor_retries": 3,
         "forceipv4": True,
         "format": "bestaudio/best",
         "outtmpl": "%(id)s.%(ext)s",
+        "ratelimit": 1000000,
+        "progress_hooks": [progress_hook],
         "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}}
     }
     
