@@ -17,10 +17,7 @@ A Flask web application that automatically generates structured Markdown notes f
 ### Setup Steps
 
 1. **Clone the repository**:
-   ```bash
-   git clone <repo-url>
-   cd youtube-poadcast-transcript-obsidian-webapp
-   ```
+  
 
 2. **Configure `.env` file**:
    
