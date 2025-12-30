@@ -118,7 +118,11 @@ def _now_date_str() -> str:
 
 
 def sanitize_filename(name: str) -> str:
-    name = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
+    # Replace Obsidian forbidden characters with hyphens
+    name = re.sub(r'[#\[\]\|\^]', "-", name)
+    # Remove other filesystem forbidden characters
+    name = re.sub(r'[\\/:*?"<>]+', "", name).strip()
+    # Collapse multiple spaces
     name = re.sub(r"\s+", " ", name)
     return name[:180]
 
