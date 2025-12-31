@@ -10,6 +10,7 @@ services:
       - type: bind
         source: /absolute/path/to/your/local/vault
         target: /vault
+      - upload-temp:/tmp/video_uploads
     command: >
       sh -c "gunicorn -b 0.0.0.0:${PORT:-5050} app:app --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${WEB_TIMEOUT:-600}"
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -23,6 +24,7 @@ services:
       - type: bind
         source: /absolute/path/to/your/local/vault
         target: /vault
+      - upload-temp:/tmp/video_uploads
       # cache HF/CT2 models so downloads happen once
       - models-cache:/root/.cache
     # Increase memory and CPU for long transcriptions (2+ hours)
@@ -52,3 +54,4 @@ services:
 volumes:
   redis-data:
   models-cache:
+  upload-temp:

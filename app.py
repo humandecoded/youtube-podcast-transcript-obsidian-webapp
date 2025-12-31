@@ -5,12 +5,27 @@ from dotenv import load_dotenv
 from redis import Redis
 from rq import Queue
 from rq.job import Job
+from werkzeug.utils import secure_filename
 from services.youtube_notes import process_youtube, DEFAULT_LANGS
-from services.podcast_notes import process_podcast
+from services.podcast_notes import process_podcast, process_local_video
 
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
+
+# Configure upload settings
+UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/video_uploads")
+ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm', 'flv', 'wmv', 'm4v', 'mpg', 'mpeg', 'mp3', 'wav', 'm4a', 'ogg', 'aac'}
+MAX_CONTENT_LENGTH = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500")) * 1024 * 1024  # Default 500MB
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
+
+# Ensure upload folder exists
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # Redis / RQ
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -83,6 +98,80 @@ def podcast():
             segment_prompt=segment_prompt,
         ),
         description=f"Podcast→Obsidian for {url}",
+        result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
+        failure_ttl=int(os.getenv("RQ_FAILURE_TTL", "604800")),
+    )
+    return redirect(url_for("job_status", job_id=job.get_id()))
+
+@app.post("/upload")
+def upload_video():
+    # Check if file was uploaded
+    if 'video_file' not in request.files:
+        flash("No file selected", "error")
+        return redirect(url_for("index"))
+    
+    file = request.files['video_file']
+    
+    if file.filename == '':
+        flash("No file selected", "error")
+        return redirect(url_for("index"))
+    
+    if not allowed_file(file.filename):
+        flash(f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}", "error")
+        return redirect(url_for("index"))
+    
+    # Save the uploaded file
+    filename = secure_filename(file.filename)
+    timestamp = str(int(time.time()))
+    unique_filename = f"{timestamp}_{filename}"
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+    
+    try:
+        file.save(filepath)
+    except Exception as e:
+        flash(f"Failed to save file: {str(e)}", "error")
+        return redirect(url_for("index"))
+    
+    # Get context length from form
+    try:
+        context_length = int(request.form.get("context_length", 15000))
+        if context_length < 512:
+            context_length = 15000
+    except Exception:
+        context_length = 15000
+    
+    # Get segment duration from form
+    try:
+        segment_duration = int(request.form.get("segment_duration", 1800))
+        if segment_duration < 60:
+            segment_duration = 1800
+    except Exception:
+        segment_duration = 1800
+    
+    system_prompt = (request.form.get("system_prompt") or "").strip() or None
+    summary_prompt = (request.form.get("summary_prompt") or "").strip() or None
+    segment_prompt = (request.form.get("segment_prompt") or "").strip() or None
+    
+    # Enqueue processing job
+    job = q.enqueue(
+        process_local_video,
+        args=(filepath,),
+        kwargs=dict(
+            filename=filename,
+            vault=(request.form.get("vault") or None),
+            folder=(request.form.get("folder") or ""),
+            ollama_base=(request.form.get("ollama_base") or None),
+            model=(request.form.get("model") or None),
+            no_summary=request.form.get("no_summary") == "on",
+            include_transcript=request.form.get("include_transcript") == "on",
+            context_length=context_length,
+            per_segment=request.form.get("per_segment") == "on",
+            segment_duration=segment_duration,
+            system_prompt=system_prompt,
+            summary_prompt=summary_prompt,
+            segment_prompt=segment_prompt,
+        ),
+        description=f"Local Video→Obsidian for {filename}",
         result_ttl=int(os.getenv("RQ_RESULT_TTL", "86400")),
         failure_ttl=int(os.getenv("RQ_FAILURE_TTL", "604800")),
     )

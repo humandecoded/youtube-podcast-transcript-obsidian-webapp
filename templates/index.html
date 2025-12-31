@@ -107,5 +107,57 @@
 
 </form>
 </div>
+
+<!-- Local Video Upload card (new) -->
+<div class="card">
+<h2>📁 Local Video → Obsidian</h2>
+<form method="post" action="{{ url_for('upload_video') }}" enctype="multipart/form-data">
+<label> Video File
+<input type="file" name="video_file" accept="video/*,audio/*,.mp4,.avi,.mov,.mkv,.webm,.flv,.wmv,.m4v,.mpg,.mpeg,.mp3,.wav,.m4a,.ogg,.aac" required>
+<small>Supported: mp4, avi, mov, mkv, webm, mp3, wav, etc. (Max: 500MB default)</small>
+</label>
+<div class="row">
+<label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
+<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
+</div>
+<div class="row">
+<label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
+<label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
+</div>
+<div class="form-group">
+<label for="upload_context_length">Context length:</label>
+<input type="number" id="upload_context_length" name="context_length" value="{{ defaults.context_length or 15000 }}" min="512" max="128000">
+<small>Maximum context size for the LLM (tokens)</small>
+</div>
+<div class="form-group">
+<label for="upload_segment_duration">Segment duration (seconds):</label>
+<input type="number" id="upload_segment_duration" name="segment_duration" value="1800" min="60" max="7200" step="60">
+<small>Duration for each segment when using per-time summaries (1800 = 30 minutes)</small>
+</div>
+<div class="form-group">
+<label for="upload_system_prompt">System Prompt:</label>
+<textarea id="upload_system_prompt" name="system_prompt" rows="3">{{ defaults.system_prompt }}</textarea>
+<small>Sets the overall behavior for the AI (prepended to all prompts)</small>
+</div>
+<div class="form-group">
+<label for="upload_summary_prompt">Full Summary Prompt:</label>
+<textarea id="upload_summary_prompt" name="summary_prompt" rows="6">{{ defaults.podcast_summary_prompt }}</textarea>
+<small>Used for complete transcript summary. Supports: {show}, {title}, {url}, {transcript}</small>
+</div>
+<div class="form-group">
+<label for="upload_segment_prompt">Per-Segment Prompt:</label>
+<textarea id="upload_segment_prompt" name="segment_prompt" rows="4">{{ defaults.podcast_segment_prompt }}</textarea>
+<small>Used when per-segment mode is enabled. Supports: {show}, {title}, {url}, {start_hms}, {end_hms}, {transcript}</small>
+</div>
+<label><input type="checkbox" name="no_summary"> Metadata only (transcript without summary)</label>
+<label><input type="checkbox" name="include_transcript"> Include transcript in note</label>
+<label>
+    <input type="checkbox" name="per_segment" id="upload_per_segment"> 
+    ⏱️ Per-segment summaries (for long videos)
+</label>
+<button type="submit">Upload & Process</button>
+
+</form>
+</div>
 </div>
 {% endblock %}

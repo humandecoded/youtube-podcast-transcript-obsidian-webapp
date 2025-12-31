@@ -314,15 +314,24 @@ def _transcribe_in_chunks(audio_path: str, chunk_duration: int, tmpdir: str) -> 
     return text, all_segments if all_segments else None
 
 
-def try_transcript_via_asr(url: str, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+def try_transcript_via_asr(url: Optional[str] = None, use_cookies: bool = False, use_proxy: bool = False, local_file_path: Optional[str] = None) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     Download audio (yt-dlp) and transcribe locally using faster-whisper.
     Requires: faster-whisper + ffmpeg in your image, and PODCAST_ASR_ENABLE=1.
     Uses cookies if use_cookies=True and YTDLP_COOKIES (Netscape format) is set in env.
     Uses proxy if use_proxy=True and YTDLP_PROXY_FILE is set in env.
+    
+    Args:
+        url: URL to download audio from (ignored if local_file_path is provided)
+        use_cookies: Whether to use cookies for download
+        use_proxy: Whether to use proxy for download
+        local_file_path: Path to local audio/video file (skips download if provided)
     """
     asr_enabled = os.getenv("PODCAST_ASR_ENABLE", "0")
-    logger.info(f"ASR transcription attempt for URL: {url}")
+    if local_file_path:
+        logger.info(f"ASR transcription for local file: {local_file_path}")
+    else:
+        logger.info(f"ASR transcription attempt for URL: {url}")
     logger.info(f"PODCAST_ASR_ENABLE={asr_enabled}")
     
     if asr_enabled != "1":
@@ -386,27 +395,37 @@ def try_transcript_via_asr(url: str, use_cookies: bool = False, use_proxy: bool 
     logger.info(f"Created temporary directory: {tmpdir}")
     
     try:
-        logger.info("Starting audio download with yt-dlp...")
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            video_id = info.get('id')
-            logger.info(f"Audio download completed. Video ID: {video_id}")
+        # Use local file if provided, otherwise download from URL
+        if local_file_path:
+            if not os.path.exists(local_file_path):
+                raise RuntimeError(f"Local file not found: {local_file_path}")
+            audio_path = local_file_path
+            logger.info(f"Using local file: {audio_path}")
+        else:
+            if not url:
+                raise RuntimeError("Either url or local_file_path must be provided")
             
-            # choose the downloaded file
-            candidates = glob.glob(os.path.join(os.getcwd(), f"{video_id}.*"))
-            logger.info(f"Found {len(candidates)} audio file candidates: {candidates}")
-            
-            if candidates:
-                audio_path = candidates[0]
-                # move into tmpdir for cleanup
-                new_path = os.path.join(tmpdir, os.path.basename(audio_path))
-                shutil.move(audio_path, new_path)
-                audio_path = new_path
-                logger.info(f"Audio file moved to: {audio_path}")
+            logger.info("Starting audio download with yt-dlp...")
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                video_id = info.get('id')
+                logger.info(f"Audio download completed. Video ID: {video_id}")
+                
+                # choose the downloaded file
+                candidates = glob.glob(os.path.join(os.getcwd(), f"{video_id}.*"))
+                logger.info(f"Found {len(candidates)} audio file candidates: {candidates}")
+                
+                if candidates:
+                    audio_path = candidates[0]
+                    # move into tmpdir for cleanup
+                    new_path = os.path.join(tmpdir, os.path.basename(audio_path))
+                    shutil.move(audio_path, new_path)
+                    audio_path = new_path
+                    logger.info(f"Audio file moved to: {audio_path}")
 
-        if not audio_path:
-            logger.error("No audio file was downloaded")
-            raise RuntimeError("Audio download failed: no file found after yt-dlp extraction")
+            if not audio_path:
+                logger.error("No audio file was downloaded")
+                raise RuntimeError("Audio download failed: no file found after yt-dlp extraction")
 
         # Get audio duration to decide on chunking strategy
         try:
@@ -498,6 +517,7 @@ def try_transcript_via_asr(url: str, use_cookies: bool = False, use_proxy: bool 
     finally:
         logger.info(f"Cleaning up temporary directory: {tmpdir}")
         shutil.rmtree(tmpdir, ignore_errors=True)
+        # Note: local_file_path cleanup is handled by caller (process_local_video)
 
 
 # ----------------------------- Summarization (Ollama) -----------------------------
@@ -740,8 +760,10 @@ def write_obsidian_note(vault_path: Path, folder: str, meta: Dict[str, Any], bod
 # ----------------------------- Orchestrator -----------------------------
 
 def process_podcast(
-    podcast_url: str,
+    podcast_url: Optional[str] = None,
     *,
+    local_file_path: Optional[str] = None,
+    filename: Optional[str] = None,
     vault: Optional[str] = None,
     folder: Optional[str] = "",
     langs: Optional[List[str]] = None,
@@ -758,20 +780,32 @@ def process_podcast(
     summary_prompt: Optional[str] = None,
     segment_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Main entrypoint (mirrors youtube_notes.process_youtube signature).
+    """Main entrypoint for podcast/audio processing (works with URLs or local files).
+    
+    Either podcast_url OR local_file_path must be provided.
+    
+    Args:
+        podcast_url: URL to podcast episode (Apple, Spotify, RSS, etc.)
+        local_file_path: Path to local video/audio file (skips metadata fetch)
+        filename: Original filename for local files (used for title)
+        vault: Obsidian vault path
+        folder: Subfolder within vault
+        langs: Preferred transcript languages (unused for local files)
+        ollama_base: Ollama API base URL
+        model: Ollama model name
+        no_summary: Skip summarization if True
+        include_transcript: Include transcript in note
+        context_length: Ollama context window size (num_ctx)
+        per_segment: Create per-segment summaries
+        segment_duration: Duration for segments (default: 1800 = 30 minutes)
+        use_cookies: Use YTDLP_COOKIES for authenticated content
+        use_proxy: Use YTDLP_PROXY_FILE for proxy rotation
+        system_prompt: Optional system prompt
+        summary_prompt: Optional summary prompt template
+        segment_prompt: Optional segment prompt template
     
     Returns:
-      { "meta": {...}, "summary": "<md>", "note_path": "/abs/path.md" }
-    Raises on hard failures (so RQ can record them).
-    
-    context_length: Ollama context window size (num_ctx).
-    per_segment: If True, create independent summaries for each time segment.
-    segment_duration: Duration in seconds for each segment (default: 1800 = 30 minutes).
-    use_cookies: If True, use YTDLP_COOKIES file for authenticated content.
-    use_proxy: If True, use YTDLP_PROXY_FILE for proxy rotation.
-    system_prompt: Optional system prompt (prepended to all prompts).
-    summary_prompt: Optional full summary prompt template.
-    segment_prompt: Optional segment prompt template.
+        { "meta": {...}, "summary": "<md>", "note_path": "/abs/path.md" }
     """
     load_dotenv()
 
@@ -781,18 +815,44 @@ def process_podcast(
     ollama_base = ollama_base or os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 
-    # 1) Metadata
-    meta = fetch_podcast_metadata(podcast_url, use_cookies=use_cookies, use_proxy=use_proxy)
+    # Validate inputs
+    if not podcast_url and not local_file_path:
+        raise ValueError("Either podcast_url or local_file_path must be provided")
 
-    # 2) Transcript (ASR only - download and transcribe audio)
-    logger.info(f"Starting podcast processing for: {podcast_url}")
-    logger.info(f"Vault: {vault}, Folder: {folder}, No summary: {no_summary}")
-    logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
-    
+    # 1) Metadata
+    if local_file_path:
+        # Local file: create metadata from filename (same structure as podcast metadata)
+        original_name = filename or os.path.basename(local_file_path)
+        title = os.path.splitext(original_name)[0]  # Remove extension
+        meta = {
+            "episode_title": title,
+            "show": "",  # Blank - user can fill in manually
+            "publish_date": "",  # Blank - user can fill in manually
+            "duration": None,
+            "url": "",  # Blank - no URL for local files
+            "audio_url": "",  # Blank - no URL for local files
+            "id": "",  # Blank - no ID for local files
+        }
+        logger.info(f"Starting local file processing: {local_file_path}")
+        logger.info(f"Title: {title}, Vault: {vault}, Folder: {folder}")
+    else:
+        # Remote URL: fetch metadata
+        meta = fetch_podcast_metadata(podcast_url, use_cookies=use_cookies, use_proxy=use_proxy)
+        logger.info(f"Starting podcast processing for: {podcast_url}")
+        logger.info(f"Vault: {vault}, Folder: {folder}, No summary: {no_summary}")
+        logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
+
+    # 2) Transcript
     try:
-        transcript_text, transcript_segments = try_transcript_via_asr(podcast_url, use_cookies=use_cookies, use_proxy=use_proxy)
+        transcript_text, transcript_segments = try_transcript_via_asr(
+            url=podcast_url,
+            use_cookies=use_cookies,
+            use_proxy=use_proxy,
+            local_file_path=local_file_path
+        )
     except Exception as e:
-        logger.error(f"Transcription failed for {podcast_url}: {str(e)}")
+        source = local_file_path or podcast_url
+        logger.error(f"Transcription failed for {source}: {str(e)}")
         raise  # Re-raise with original context
 
     # 3) Body
@@ -813,12 +873,15 @@ def process_podcast(
                 model=model,
                 title=meta.get("episode_title") or "",
                 show=meta.get("show") or "",
-                url=meta.get("url") or podcast_url,
+                url=meta.get("url") or podcast_url or "",
                 transcript=transcript_text,
                 segments=transcript_segments,
                 context_length=context_length,
                 per_segment=per_segment,
                 segment_duration=segment_duration,
+                system_prompt=system_prompt,
+                summary_prompt=summary_prompt,
+                segment_prompt=segment_prompt,
             )
             logger.info("Summarization completed successfully")
         except Exception as e:
@@ -839,4 +902,51 @@ def process_podcast(
             raise
 
     logger.info("Podcast processing completed successfully")
+    
+    # Clean up uploaded local file if applicable
+    if local_file_path:
+        try:
+            if os.path.exists(local_file_path):
+                os.remove(local_file_path)
+                logger.info(f"Cleaned up uploaded file: {local_file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up uploaded file {local_file_path}: {str(e)}")
+    
     return {"meta": meta, "summary": body, "note_path": note_path}
+
+
+# Alias for backward compatibility with app.py
+def process_local_video(
+    video_path: str,
+    *,
+    filename: Optional[str] = None,
+    vault: Optional[str] = None,
+    folder: Optional[str] = "",
+    ollama_base: Optional[str] = None,
+    model: Optional[str] = None,
+    no_summary: bool = False,
+    include_transcript: bool = False,
+    context_length: int = 15000,
+    per_segment: bool = False,
+    segment_duration: int = 1800,
+    system_prompt: Optional[str] = None,
+    summary_prompt: Optional[str] = None,
+    segment_prompt: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Wrapper for process_podcast that handles local video files."""
+    return process_podcast(
+        local_file_path=video_path,
+        filename=filename,
+        vault=vault,
+        folder=folder,
+        ollama_base=ollama_base,
+        model=model,
+        no_summary=no_summary,
+        include_transcript=include_transcript,
+        context_length=context_length,
+        per_segment=per_segment,
+        segment_duration=segment_duration,
+        system_prompt=system_prompt,
+        summary_prompt=summary_prompt,
+        segment_prompt=segment_prompt,
+    )
