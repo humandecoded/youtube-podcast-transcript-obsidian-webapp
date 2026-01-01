@@ -5,6 +5,18 @@
   <p><strong>Job ID:</strong> <code>{{ job_id }}</code></p>
   <p><strong>Status:</strong> {{ status }}</p>
 
+  {% if current_step %}
+    <p><strong>Current Step:</strong> {{ current_step }}</p>
+  {% endif %}
+
+  {% if logs %}
+    <details open>
+      <summary><strong>Processing Logs</strong></summary>
+      <pre class="code" style="max-height: 400px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; padding: 10px; border-radius: 4px;">{% for log in logs %}{{ log }}
+{% endfor %}</pre>
+    </details>
+  {% endif %}
+
   {% if refresh_secs and not error %}
     <p class="muted">Refreshing in {{ refresh_secs }}s…</p>
     <script>

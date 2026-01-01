@@ -255,11 +255,15 @@ def job_status(job_id):
     if job.is_failed:
         error = str(job.exc_info).splitlines()[-1][:1000] if job.exc_info else "Job failed"
 
+    # Get progress logs from job.meta
+    logs = job.meta.get('logs', []) if hasattr(job, 'meta') and job.meta else []
+    current_step = job.meta.get('current_step', '') if hasattr(job, 'meta') and job.meta else ''
+
     # Auto-refresh while pending/started
-    refresh_secs = 3 if status in ("queued", "started", "deferred") else 0
+    refresh_secs = 2 if status in ("queued", "started", "deferred") else 0
     return render_template("result_async.html",
                            job_id=job_id, status=status, result=result, error=error,
-                           refresh_secs=refresh_secs)
+                           refresh_secs=refresh_secs, logs=logs, current_step=current_step)
 
 if __name__ == "__main__":
     app.run(debug=True, port=int(os.getenv("PORT", "5050")))

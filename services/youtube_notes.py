@@ -38,6 +38,13 @@ from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 from yt_dlp import YoutubeDL
 
+# Optional RQ import for job progress tracking
+try:
+    from rq import get_current_job
+    RQ_AVAILABLE = True
+except ImportError:
+    RQ_AVAILABLE = False
+
 # Configure logging
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -83,7 +90,24 @@ DEFAULT_SEGMENT_PROMPT = os.getenv(
 )
 
 
-# ----------------------------- URL & metadata -----------------------------
+# ----------------------------- Utilities -----------------------------
+
+def _log_progress(message: str, step: Optional[str] = None):
+    """Log progress message and update job metadata if running in RQ worker."""
+    logger.info(message)
+    
+    if RQ_AVAILABLE:
+        try:
+            job = get_current_job()
+            if job:
+                if 'logs' not in job.meta:
+                    job.meta['logs'] = []
+                job.meta['logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+                if step:
+                    job.meta['current_step'] = step
+                job.save_meta()
+        except Exception:
+            pass  # Silently fail if not in RQ context
 
 def _get_random_proxy() -> Optional[str]:
     """Read proxy list file and return a random proxy."""
@@ -518,10 +542,12 @@ def ollama_summarize(
         if not time_chunks:
             return "# Summary\n\n_(No content to summarize)_"
         
+        _log_progress(f"Creating {len(time_chunks)} segment summaries...")
         result_parts: List[str] = []
         for i, (chunk_text, start_sec, end_sec) in enumerate(time_chunks, 1):
             start_hms = fmt_hms(int(start_sec))
             end_hms = fmt_hms(int(end_sec))
+            _log_progress(f"Summarizing segment {i}/{len(time_chunks)}: {start_hms} - {end_hms}")
             
             # Use segment prompt with system prompt prepended
             segment_prompt_text = (
@@ -700,35 +726,45 @@ def process_youtube(
     logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
 
     # Metadata first (always)
+    _log_progress("Fetching video metadata...", "Fetching Metadata")
     try:
         meta, proxy_used = fetch_metadata(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
         logger.info(f"Metadata fetched successfully. Title: {meta.get('title')}")
+        _log_progress(f"Found: {meta.get('title', 'Unknown')}")
     except Exception as e:
         logger.error(f"Failed to fetch metadata: {str(e)}")
+        _log_progress(f"Metadata fetch failed: {str(e)}", "Error")
         raise
 
     # Build note body
     if no_summary:
         logger.info("Skipping summary generation (no_summary=True)")
+        _log_progress("Metadata-only mode (skipping transcript/summary)", "Metadata Only")
         transcript_text: Optional[str] = None
         if include_transcript:
             try:
                 logger.info("Fetching transcript for inclusion...")
+                _log_progress("Fetching transcript...")
                 transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+                _log_progress("Transcript fetched")
             except Exception as e:
                 logger.warning(f"Failed to fetch transcript: {str(e)}")
                 transcript_text = None
         body = make_metadata_only_body(meta, transcript_text=transcript_text)
     else:
         logger.info("Fetching transcript for summarization...")
+        _log_progress("Fetching transcript...", "Fetching Transcript")
         try:
             transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
             logger.info(f"Transcript fetched. Length: {len(transcript_text)} chars, Segments: {len(segments) if segments else 0}")
+            _log_progress(f"Transcript fetched ({len(transcript_text)} chars)")
         except Exception as e:
             logger.error(f"Failed to get transcript: {str(e)}")
+            _log_progress(f"Transcript fetch failed: {str(e)}", "Error")
             raise
         
         logger.info("Starting summarization...")
+        _log_progress("Generating AI summary...", "Summarizing")
         try:
             body = ollama_summarize(
                 base_url=ollama_base,
@@ -745,18 +781,23 @@ def process_youtube(
                 segment_prompt=segment_prompt,
             )
             logger.info("Summarization completed successfully")
+            _log_progress("Summary complete", "Summary Complete")
         except Exception as e:
             logger.error(f"Summarization failed: {str(e)}")
+            _log_progress(f"Summarization failed: {str(e)}", "Error")
             raise
 
     note_path: Optional[str] = None
     if vault:
         logger.info(f"Writing Obsidian note to vault: {vault}")
+        _log_progress("Writing note to Obsidian vault...", "Writing Note")
         try:
             note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
             logger.info(f"Note written successfully to: {note_path}")
+            _log_progress(f"Note saved: {os.path.basename(note_path)}", "Complete")
         except Exception as e:
             logger.error(f"Failed to write note: {str(e)}")
+            _log_progress(f"Failed to write note: {str(e)}", "Error")
             raise
 
     logger.info("YouTube processing completed successfully")

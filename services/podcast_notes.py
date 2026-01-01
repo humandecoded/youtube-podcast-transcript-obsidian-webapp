@@ -39,6 +39,13 @@ import requests
 from dotenv import load_dotenv
 from yt_dlp import YoutubeDL
 
+# Try to import rq for job progress tracking
+try:
+    from rq import get_current_job
+    RQ_AVAILABLE = True
+except ImportError:
+    RQ_AVAILABLE = False
+
 # Optional timezone support
 try:
     from zoneinfo import ZoneInfo  # py3.9+
@@ -91,6 +98,23 @@ DEFAULT_PODCAST_SEGMENT_PROMPT = os.getenv(
 
 
 # ----------------------------- Utilities -----------------------------
+
+def _log_progress(message: str, step: Optional[str] = None):
+    """Log progress message and update job metadata if running in RQ worker."""
+    logger.info(message)
+    
+    if RQ_AVAILABLE:
+        try:
+            job = get_current_job()
+            if job:
+                if 'logs' not in job.meta:
+                    job.meta['logs'] = []
+                job.meta['logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+                if step:
+                    job.meta['current_step'] = step
+                job.save_meta()
+        except Exception:
+            pass  # Silently fail if not in RQ context
 
 def _get_random_proxy() -> Optional[str]:
     """Read proxy list file and return a random proxy."""
@@ -225,6 +249,7 @@ def _transcribe_in_chunks(audio_path: str, chunk_duration: int, tmpdir: str) -> 
     from faster_whisper import WhisperModel  # type: ignore
     
     logger.info(f"Starting chunked transcription with {chunk_duration}s chunks")
+    _log_progress(f"Using chunked transcription ({chunk_duration}s chunks) for long audio...")
     
     model_name = os.getenv("PODCAST_ASR_MODEL", "base")
     device = os.getenv("PODCAST_ASR_DEVICE", "cpu")
@@ -232,7 +257,9 @@ def _transcribe_in_chunks(audio_path: str, chunk_duration: int, tmpdir: str) -> 
     beam_size = int(os.getenv("PODCAST_ASR_BEAM_SIZE", "1"))
     
     logger.info(f"Loading Whisper model: {model_name}")
+    _log_progress("Loading Whisper model...")
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    _log_progress(f"Model loaded: {model_name}")
     
     all_segments: List[Dict[str, Any]] = []
     chunk_num = 0
@@ -272,6 +299,7 @@ def _transcribe_in_chunks(audio_path: str, chunk_duration: int, tmpdir: str) -> 
         
         # Transcribe chunk
         logger.info(f"Transcribing chunk {chunk_num}...")
+        _log_progress(f"Transcribing chunk {chunk_num}...")
         try:
             segments, _ = model.transcribe(
                 chunk_path,
@@ -358,11 +386,16 @@ def try_transcript_via_asr(url: Optional[str] = None, use_cookies: bool = False,
             eta = d.get('eta', 0)
             if total:
                 percent = (downloaded / total) * 100
-                logger.info(f"Download progress: {percent:.1f}% ({downloaded}/{total} bytes) Speed: {speed/1024:.1f} KB/s ETA: {eta}s")
+                msg = f"Download progress: {percent:.1f}% ({downloaded}/{total} bytes) Speed: {speed/1024:.1f} KB/s ETA: {eta}s"
+                logger.info(msg)
+                # Log to job.meta every 10% to avoid spamming
+                if int(percent) % 10 == 0 and int(percent) != 0:
+                    _log_progress(f"Downloading: {percent:.0f}% complete")
             else:
                 logger.info(f"Download progress: {downloaded} bytes downloaded, Speed: {speed/1024:.1f} KB/s")
         elif d['status'] == 'finished':
             logger.info(f"Download finished: {d.get('filename')}")
+            _log_progress("Download finished")
 
     ydl_opts: Dict[str, Any] = {
         "verbose": True,
@@ -401,11 +434,13 @@ def try_transcript_via_asr(url: Optional[str] = None, use_cookies: bool = False,
                 raise RuntimeError(f"Local file not found: {local_file_path}")
             audio_path = local_file_path
             logger.info(f"Using local file: {audio_path}")
+            _log_progress(f"Using local file: {os.path.basename(audio_path)}")
         else:
             if not url:
                 raise RuntimeError("Either url or local_file_path must be provided")
             
             logger.info("Starting audio download with yt-dlp...")
+            _log_progress("Downloading audio...", "Downloading")
             with YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 video_id = info.get('id')
@@ -422,6 +457,7 @@ def try_transcript_via_asr(url: Optional[str] = None, use_cookies: bool = False,
                     shutil.move(audio_path, new_path)
                     audio_path = new_path
                     logger.info(f"Audio file moved to: {audio_path}")
+                    _log_progress("Audio download complete")
 
             if not audio_path:
                 logger.error("No audio file was downloaded")
@@ -456,15 +492,18 @@ def try_transcript_via_asr(url: Optional[str] = None, use_cookies: bool = False,
         logger.info(f"Initializing Whisper model with: model={model_name}, device={device}, compute_type={compute_type}, beam_size={beam_size}")
         logger.info("For long podcasts, consider: model=tiny, compute_type=int8, beam_size=1")
         
+        _log_progress("Loading Whisper model...")
         try:
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
             logger.info("Whisper model loaded successfully")
+            _log_progress(f"Loaded model: {model_name}")
         except Exception as e:
             logger.error(f"Failed to load Whisper model: {str(e)}")
             logger.debug(traceback.format_exc())
             raise RuntimeError(f"Failed to load Whisper model '{model_name}' on device '{device}': {str(e)}") from e
         
         logger.info(f"Starting transcription of: {audio_path}")
+        _log_progress(f"Transcribing audio ({duration_seconds/60:.1f} minutes)...")
         try:
             segments, info = model.transcribe(
                 audio_path, 
@@ -651,6 +690,7 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
     if per_segment and segments:
         time_chunks = chunk_segments_by_duration(segments, duration_seconds=segment_duration)
         logger.info(f"Created {len(time_chunks)} time-based chunks for summarization")
+        _log_progress(f"Creating {len(time_chunks)} segment summaries...")
         
         if not time_chunks:
             logger.warning("No time chunks created from segments")
@@ -661,6 +701,7 @@ def summarize_with_ollama(base_url: str, model: str, title: str, show: str, url:
             start_hms = fmt_hms(int(start_sec))
             end_hms = fmt_hms(int(end_sec))
             logger.info(f"Summarizing segment {i}/{len(time_chunks)}: {start_hms} - {end_hms}")
+            _log_progress(f"Summarizing segment {i}/{len(time_chunks)}: {start_hms} - {end_hms}")
             
             # Use segment prompt with system prompt prepended
             segment_prompt_text = (
@@ -822,6 +863,7 @@ def process_podcast(
     # 1) Metadata
     if local_file_path:
         # Local file: create metadata from filename (same structure as podcast metadata)
+        _log_progress("Processing local video file...", "Preparing")
         original_name = filename or os.path.basename(local_file_path)
         title = os.path.splitext(original_name)[0]  # Remove extension
         meta = {
@@ -835,12 +877,15 @@ def process_podcast(
         }
         logger.info(f"Starting local file processing: {local_file_path}")
         logger.info(f"Title: {title}, Vault: {vault}, Folder: {folder}")
+        _log_progress(f"File: {original_name}")
     else:
         # Remote URL: fetch metadata
+        _log_progress("Fetching podcast metadata...", "Fetching Metadata")
         meta = fetch_podcast_metadata(podcast_url, use_cookies=use_cookies, use_proxy=use_proxy)
         logger.info(f"Starting podcast processing for: {podcast_url}")
         logger.info(f"Vault: {vault}, Folder: {folder}, No summary: {no_summary}")
         logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
+        _log_progress(f"Found: {meta.get('episode_title', 'Unknown')}")
 
     # 2) Transcript
     transcript_text = None
@@ -849,7 +894,9 @@ def process_podcast(
     # Skip transcription if metadata-only mode (unless transcript is explicitly requested)
     if no_summary and not include_transcript:
         logger.info("Skipping transcription (metadata-only mode)")
+        _log_progress("Skipping transcription (metadata-only mode)", "Metadata Only")
     else:
+        _log_progress("Starting transcription...", "Transcribing")
         try:
             transcript_text, transcript_segments = try_transcript_via_asr(
                 url=podcast_url,
@@ -857,23 +904,28 @@ def process_podcast(
                 use_proxy=use_proxy,
                 local_file_path=local_file_path
             )
+            _log_progress("Transcription complete", "Transcription Complete")
         except Exception as e:
             source = local_file_path or podcast_url
             logger.error(f"Transcription failed for {source}: {str(e)}")
+            _log_progress(f"Transcription failed: {str(e)}", "Error")
             raise  # Re-raise with original context
 
     # 3) Body
     if no_summary:
         logger.info("Skipping summary generation (no_summary=True)")
+        _log_progress("Skipping summarization (metadata-only mode)", "Metadata Only")
         body = make_metadata_only_body(meta, transcript_text if include_transcript else None)
     else:
         if not transcript_text:
             logger.error("No transcript text available for summarization")
+            _log_progress("Error: No transcript available for summarization", "Error")
             raise RuntimeError(
                 "Audio transcription failed. No transcript text was generated. "
                 "Check the logs above for specific errors. "
                 "Ensure PODCAST_ASR_ENABLE=1 and faster-whisper is installed."
             )
+        _log_progress("Generating AI summary...", "Summarizing")
         try:
             body = summarize_with_ollama(
                 base_url=ollama_base,
@@ -891,21 +943,26 @@ def process_podcast(
                 segment_prompt=segment_prompt,
             )
             logger.info("Summarization completed successfully")
+            _log_progress("Summary complete", "Summary Complete")
         except Exception as e:
             logger.error(f"Summarization failed: {str(e)}")
             logger.debug(traceback.format_exc())
+            _log_progress(f"Summarization failed: {str(e)}", "Error")
             raise
 
     # 4) Write note
     note_path = None
     if vault:
         logger.info(f"Writing Obsidian note to vault: {vault}")
+        _log_progress("Writing note to Obsidian vault...", "Writing Note")
         try:
             note_path = str(write_obsidian_note(Path(vault).expanduser().resolve(), folder or "", meta, body))
             logger.info(f"Note written successfully to: {note_path}")
+            _log_progress(f"Note saved: {os.path.basename(note_path)}", "Complete")
         except Exception as e:
             logger.error(f"Failed to write note: {str(e)}")
             logger.debug(traceback.format_exc())
+            _log_progress(f"Failed to write note: {str(e)}", "Error")
             raise
 
     logger.info("Podcast processing completed successfully")
@@ -916,6 +973,9 @@ def process_podcast(
             if os.path.exists(local_file_path):
                 os.remove(local_file_path)
                 logger.info(f"Cleaned up uploaded file: {local_file_path}")
+                _log_progress("Cleaned up temporary file")
+        except Exception as e:
+            logger.warning(f"Failed to clean up uploaded file: {str(e)}")
         except Exception as e:
             logger.warning(f"Failed to clean up uploaded file {local_file_path}: {str(e)}")
     
