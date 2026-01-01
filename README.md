@@ -101,11 +101,11 @@ A Flask web application that automatically generates structured Markdown notes f
 - **Notes not appearing**: Verify the volume mount paths in `docker-compose.yml` match your Obsidian vault location
 - **Podcast transcription fails**: Set `PODCAST_ASR_ENABLE=1` in `.env` and ensure adequate RAM (16GB+) is available
 
-### Context Size vs Segment Length
+### Context Length vs Segment Duration
 
 ![alt text](image.png)
 
-- Context size (tokens) relates to the model you are feeding your transcript to. If your model supports large context lengths, be sure to set your context window higher here to take advantage of that. Larger context lengths will allow you to process longer transcripts without segmenting. I've found a context window of 32,000 tokens to be more than adequate for an hour of transcription. 
+- Context length (tokens) relates to the model you are feeding your transcript to. If your model supports large context lengths, be sure to set your context window higher here to take advantage of that. Larger context lengths will allow you to process longer transcripts without segmenting. I've found a context window of 32,000 tokens to be more than adequate for an hour of transcription. 
 - Segment length comes in to play when you have to (or want to) summarize individual sections of a transcript because it's too long for the context you can support. The sections are summarized individually and written in to you note. *The individual sections are NOT merged together in a larger summary*
 
 ## Overview
