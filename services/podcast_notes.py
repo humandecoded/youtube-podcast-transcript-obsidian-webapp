@@ -181,7 +181,7 @@ def fetch_podcast_metadata(url: str, use_cookies: bool = False, use_proxy: bool 
         raise RuntimeError(f"Failed to fetch podcast metadata: {str(e)}") from e
 
     # Try to infer show name
-    show = info.get("uploader") or info.get("artist") or info.get("album") or info.get("channel")
+    show = info.get("series") or info.get("uploader") or info.get("artist") or info.get("album") or info.get("channel")
     title = info.get("title")
     date = info.get("upload_date") or info.get("release_date")  # YYYYMMDD
     duration = info.get("duration")
@@ -685,11 +685,11 @@ def yaml_front_matter(meta: Dict[str, Any]) -> str:
     props: Dict[str, Any] = {
         "title": meta.get("episode_title"),
         "type": "podcast",
-        "show": meta.get("show"),
+        "channel": meta.get("show"),
         "episode_id": meta.get("id"),
         "url": meta.get("url"),
         "audio_url": meta.get("audio_url"),
-        "publish_date": meta.get("publish_date"),
+        "upload_date": meta.get("publish_date"),
         "duration_seconds": meta.get("duration"),
         "tags": ["media", "podcast"],
         "consumed": _now_date_str(),
@@ -843,17 +843,24 @@ def process_podcast(
         logger.info(f"Use cookies: {use_cookies}, Use proxy: {use_proxy}")
 
     # 2) Transcript
-    try:
-        transcript_text, transcript_segments = try_transcript_via_asr(
-            url=podcast_url,
-            use_cookies=use_cookies,
-            use_proxy=use_proxy,
-            local_file_path=local_file_path
-        )
-    except Exception as e:
-        source = local_file_path or podcast_url
-        logger.error(f"Transcription failed for {source}: {str(e)}")
-        raise  # Re-raise with original context
+    transcript_text = None
+    transcript_segments = None
+    
+    # Skip transcription if metadata-only mode (unless transcript is explicitly requested)
+    if no_summary and not include_transcript:
+        logger.info("Skipping transcription (metadata-only mode)")
+    else:
+        try:
+            transcript_text, transcript_segments = try_transcript_via_asr(
+                url=podcast_url,
+                use_cookies=use_cookies,
+                use_proxy=use_proxy,
+                local_file_path=local_file_path
+            )
+        except Exception as e:
+            source = local_file_path or podcast_url
+            logger.error(f"Transcription failed for {source}: {str(e)}")
+            raise  # Re-raise with original context
 
     # 3) Body
     if no_summary:
