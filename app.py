@@ -81,7 +81,6 @@ def podcast():
         process_podcast,
         args=(url,),
         kwargs=dict(
-            vault=(request.form.get("vault") or None),
             folder=(request.form.get("folder") or ""),
             langs=[s.strip() for s in (request.form.get("langs") or "").split(",") if s.strip()] or None,
             ollama_base=(request.form.get("ollama_base") or None),
@@ -158,7 +157,6 @@ def upload_video():
         args=(filepath,),
         kwargs=dict(
             filename=filename,
-            vault=(request.form.get("vault") or None),
             folder=(request.form.get("folder") or ""),
             ollama_base=(request.form.get("ollama_base") or None),
             model=(request.form.get("model") or None),
@@ -185,7 +183,6 @@ def summarize():
         return redirect(url_for("index"))
 
     # Gather options
-    vault = (request.form.get("vault") or "").strip() or None
     folder = (request.form.get("folder") or "").strip()
     langs = [s.strip() for s in (request.form.get("langs") or "").split(",") if s.strip()]
     ollama_base = (request.form.get("ollama_base") or "").strip() or None
@@ -219,7 +216,6 @@ def summarize():
         process_youtube,
         args=(url,),
         kwargs={
-            "vault": vault,
             "folder": folder,
             "langs": langs or None,
             "ollama_base": ollama_base,

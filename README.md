@@ -3,7 +3,9 @@
 # YouTube & Podcast Transcript to Obsidian
 
 A Flask web application that automatically generates structured Markdown notes from YouTube videos and podcast episodes, saving them directly to your Obsidian vault. Uses local Ollama for AI-powered summarization and faster-whisper for podcast transcription.
-![alt text](image.png)
+
+![alt text](image-1.png)
+
 **Human Words:** I built this app to combine my love for Obsidian note taking with my consumption of video and audio media. At first, I just wanted a script that would set up a note for me with relevant metadata. From there, I wanted functionality for the script to add in a summary of the media as well. From there, I wanted a web app where I could drop in a URL and tweak settings to my heart's content. 
 
 ## Quick Start

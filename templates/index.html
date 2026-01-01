@@ -9,15 +9,12 @@
 <label> YouTube URL
 <input type="url" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." required>
 </label>
+<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}" placeholder="Media/YouTube"></label>
 <div class="row">
-<label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
-<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
-</div>
-<div class="row">
-<label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
 <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
 <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
 </div>
+<label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
 <div class="form-group">
 <label for="context_length">Context length:</label>
 <input type="number" id="context_length" name="context_length" value="{{ defaults.context_length or 32000 }}" min="512" max="128000">
@@ -61,15 +58,12 @@
 <label> Podcast Episode URL
 <input type="url" name="podcast_url" placeholder="https://example.com/episode/..." required>
 </label>
+<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}" placeholder="Media/Podcasts"></label>
 <div class="row">
-<label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
-<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
-</div>
-<div class="row">
-<label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
 <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
 <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
 </div>
+<label>Langs <input type="text" name="langs" value="{{ defaults.langs }}"></label>
 <div class="form-group">
 <label for="podcast_context_length">Context length:</label>
 <input type="number" id="podcast_context_length" name="context_length" value="{{ defaults.context_length or 15000 }}" min="512" max="128000">
@@ -116,10 +110,7 @@
 <input type="file" name="video_file" accept="video/*,audio/*,.mp4,.avi,.mov,.mkv,.webm,.flv,.wmv,.m4v,.mpg,.mpeg,.mp3,.wav,.m4a,.ogg,.aac" required>
 <small>Supported: mp4, avi, mov, mkv, webm, mp3, wav, etc. (Max: 500MB default)</small>
 </label>
-<div class="row">
-<label>Vault <input type="text" name="vault" value="{{ defaults.vault }}"></label>
-<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}"></label>
-</div>
+<label>Folder <input type="text" name="folder" value="{{ defaults.folder }}" placeholder="Media/Videos"></label>
 <div class="row">
 <label>Ollama Base <input type="url" name="ollama_base" value="{{ defaults.ollama_base }}"></label>
 <label>Model <input type="text" name="model" value="{{ defaults.model }}"></label>
