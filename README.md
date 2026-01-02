@@ -1,6 +1,6 @@
 # ***This is vibe coded and should only be run locally. It will be writing .MD files to your actual Obsidian vault. A good idea to simply test out summarization and meta data generation outside your Obsidian vault first. Use with caution***
 
-# YouTube & Podcast Transcript to Obsidian
+# YouTube & Podcast Transcript Summaries to Obsidian
 
 A Flask web application that automatically generates structured Markdown notes from YouTube videos and podcast episodes, saving them directly to your Obsidian vault. Uses local Ollama for AI-powered summarization and faster-whisper for podcast transcription.
 
