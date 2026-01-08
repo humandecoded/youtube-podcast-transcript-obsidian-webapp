@@ -131,7 +131,7 @@ def extract_yt_id(url: str) -> Optional[str]:
     m = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
     if m:
         return m.group(1)
-    m = re.search(r"(?:youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})", url)
+    m = re.search(r"(?:youtu\.be/|/shorts/|/live/)([A-Za-z0-9_-]{11})", url)
     if m:
         return m.group(1)
     if re.fullmatch(r"[A-Za-z0-9_-]{11}", url):
