@@ -575,7 +575,7 @@ def sanitize_filename(name: str) -> str:
     name = re.sub(r'[\\/:*?"<>]+', "", name).strip()
     # Collapse multiple spaces
     name = re.sub(r"\s+", " ", name)
-    return name[:180]
+    return name[-180:]
 
 
 def fmt_upload_date(s: Optional[str]) -> Optional[str]:
@@ -659,7 +659,8 @@ def make_metadata_only_body(meta: Dict[str, Any], transcript_text: Optional[str]
 def write_obsidian_note(vault_path: Path, folder: str, meta: Dict[str, Any], body_md: str) -> Path:
     title = meta.get("title") or "Untitled Video"
     date = fmt_upload_date(meta.get("upload_date")) or ""
-    filename = sanitize_filename(f"{title} - YouTube ({date}).md" if date else f"{title} - YouTube.md")
+    channel = meta.get("channel") or "Unknown Channel"
+    filename = sanitize_filename(f"{title} - YouTube - {channel} - ({date}).md" if date else f"{title} - YouTube.md")
 
     target_dir = vault_path / folder if folder else vault_path
     target_dir.mkdir(parents=True, exist_ok=True)
