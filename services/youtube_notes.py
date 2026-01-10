@@ -139,7 +139,7 @@ def extract_yt_id(url: str) -> Optional[str]:
     return None
 
 
-def fetch_metadata(url: str, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[Dict[str, Any], Optional[str]]:
+def fetch_metadata(url: str, use_cookies: bool = False, use_proxy: bool = False, js_runtimes: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Optional[str]]:
     """Use yt-dlp to get basic metadata without downloading the media.
     Returns: (metadata_dict, proxy_used)
     """
@@ -152,9 +152,10 @@ def fetch_metadata(url: str, use_cookies: bool = False, use_proxy: bool = False)
         "extract_flat": False,
         "extractor_retries": 3,
         "forceipv4": True,
-        "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}},
        # "extractor_args": {"youtube": {"player_client": ["web"]}},
     }
+    if js_runtimes:
+        ydl_opts["js_runtimes"] = js_runtimes
     if use_cookies:
         cookies_file = os.getenv("YTDLP_COOKIES")
         if cookies_file and os.path.exists(cookies_file):
@@ -229,7 +230,7 @@ def _parse_vtt_to_segments(vtt_text: str) -> List[Dict[str, Any]]:
     return segs
 
 
-def _fetch_subtitles_via_ytdlp(youtube_url: str, langs: Optional[List[str]] = None, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
+def _fetch_subtitles_via_ytdlp(youtube_url: str, langs: Optional[List[str]] = None, use_cookies: bool = False, use_proxy: bool = False, js_runtimes: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Ask yt-dlp to download auto or manual subtitles (VTT) for the given URL, then parse them.
     Returns (full_text, segments). Raises if nothing is available.
@@ -253,9 +254,10 @@ def _fetch_subtitles_via_ytdlp(youtube_url: str, langs: Optional[List[str]] = No
             "nocheckcertificate": True,
             "extractor_retries": 3,
             "forceipv4": True,
-            "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}},
            # "extractor_args": {"youtube": {"player_client": ["web"]}},
         }
+        if js_runtimes:
+            ydl_opts["js_runtimes"] = js_runtimes
         if use_cookies:
             cookies_file = os.getenv("YTDLP_COOKIES")
             if cookies_file and os.path.exists(cookies_file):
@@ -306,7 +308,7 @@ def _to_raw(obj: Any) -> List[Dict[str, Any]]:
         return []
 
 
-def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[str] = None, use_cookies: bool = False, use_proxy: bool = False) -> Tuple[str, List[Dict[str, Any]]]:
+def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[str] = None, use_cookies: bool = False, use_proxy: bool = False, js_runtimes: Optional[Dict[str, Any]] = None) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Fetch transcript via NEW youtube-transcript-api instance API (.fetch/.list).
     If unavailable, fall back to yt-dlp auto/manual VTT subtitles.
@@ -373,7 +375,7 @@ def try_get_transcript(video_id: str, langs: List[str], youtube_url: Optional[st
 
     # 3) Final fallback: download auto/manual VTT subs via yt-dlp
     logger.info("Attempting to fetch VTT subtitles via yt-dlp...")
-    return _fetch_subtitles_via_ytdlp(youtube_url, langs, use_cookies, use_proxy)
+    return _fetch_subtitles_via_ytdlp(youtube_url, langs, use_cookies, use_proxy, js_runtimes)
 
 
 # ----------------------------- Summarization (Ollama) -----------------------------
@@ -698,6 +700,7 @@ def process_youtube(
     system_prompt: Optional[str] = None,
     summary_prompt: Optional[str] = None,
     segment_prompt: Optional[str] = None,
+    js_runtimes: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Main entrypoint used by Flask/RQ.
 
@@ -710,6 +713,10 @@ def process_youtube(
     Raises on hard failures (so RQ can record them).
     """
     load_dotenv()
+
+    # Default js_runtimes for Docker environment
+    if js_runtimes is None:
+        js_runtimes = {"bun": {"path": "/root/.bun/bin/bun"}}
 
     # Resolve env defaults
     vault = vault or os.getenv("OBSIDIAN_VAULT")
@@ -729,7 +736,7 @@ def process_youtube(
     # Metadata first (always)
     _log_progress("Fetching video metadata...", "Fetching Metadata")
     try:
-        meta, proxy_used = fetch_metadata(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+        meta, proxy_used = fetch_metadata(youtube_url, use_cookies=use_cookies, use_proxy=use_proxy, js_runtimes=js_runtimes)
         logger.info(f"Metadata fetched successfully. Title: {meta.get('title')}")
         _log_progress(f"Found: {meta.get('title', 'Unknown')}")
     except Exception as e:
@@ -746,7 +753,7 @@ def process_youtube(
             try:
                 logger.info("Fetching transcript for inclusion...")
                 _log_progress("Fetching transcript...")
-                transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+                transcript_text, _ = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy, js_runtimes=js_runtimes)
                 _log_progress("Transcript fetched")
             except Exception as e:
                 logger.warning(f"Failed to fetch transcript: {str(e)}")
@@ -756,7 +763,7 @@ def process_youtube(
         logger.info("Fetching transcript for summarization...")
         _log_progress("Fetching transcript...", "Fetching Transcript")
         try:
-            transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy)
+            transcript_text, segments = try_get_transcript(vid, langs, youtube_url=youtube_url, use_cookies=use_cookies, use_proxy=use_proxy, js_runtimes=js_runtimes)
             logger.info(f"Transcript fetched. Length: {len(transcript_text)} chars, Segments: {len(segments) if segments else 0}")
             _log_progress(f"Transcript fetched ({len(transcript_text)} chars)")
         except Exception as e:
@@ -803,3 +810,163 @@ def process_youtube(
 
     logger.info("YouTube processing completed successfully")
     return {"meta": meta, "summary": body, "note_path": note_path, "proxy_used": proxy_used}
+
+
+# ----------------------------- CLI Interface -----------------------------
+
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration from JSON file.
+    
+    Search order:
+    1. Specified config_path
+    2. ./youtube_notes.json
+    3. ~/.youtube_notes.json
+    4. Empty dict if none found
+    """
+    if config_path:
+        paths = [Path(config_path)]
+    else:
+        paths = [
+            Path.cwd() / "youtube_notes.json",
+            Path.home() / ".youtube_notes.json",
+        ]
+    
+    for path in paths:
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                logger.info(f"Loaded config from: {path}")
+                return config
+            except Exception as e:
+                logger.warning(f"Failed to load config from {path}: {e}")
+    
+    return {}
+
+
+def main():
+    """CLI entrypoint for processing YouTube videos from the command line."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Process YouTube videos into Obsidian notes with AI summaries",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage with vault
+  python youtube_notes.py "https://youtube.com/watch?v=VIDEO_ID" --vault /path/to/vault
+  
+  # With config file
+  python youtube_notes.py "VIDEO_ID" --config my_config.json
+  
+  # With folder and language preferences
+  python youtube_notes.py "VIDEO_ID" --vault ~/Documents/Obsidian --folder "Media/YouTube" --langs en,en-US
+  
+  # Metadata only (no summary)
+  python youtube_notes.py "https://youtu.be/VIDEO_ID" --vault /vault --no-summary
+  
+  # Per-hour segment summaries for long videos
+  python youtube_notes.py "https://youtube.com/watch?v=VIDEO_ID" --vault /vault --per-hour
+
+Config file format (youtube_notes.json):
+  {
+    "vault": "/path/to/vault",
+    "folder": "Media/YouTube",
+    "langs": ["en", "en-US"],
+    "ollama_url": "http://localhost:11434",
+    "model": "llama3.1:8b",
+    "no_summary": false,
+    "include_transcript": false,
+    "cookies": false,
+    "proxy": false,
+    "context_length": 4096,
+    "per_hour": false,
+    "segment_duration": 3600,
+    "js_runtimes": {"bun": {"path": "/root/.bun/bin/bun"}}
+  }
+
+Note: js_runtimes is optional and only needed in Docker or when using bun/node for yt-dlp.
+        """
+    )
+    
+    parser.add_argument("url", help="YouTube URL or video ID")
+    parser.add_argument("--config", help="Path to JSON config file (default: ./youtube_notes.json or ~/.youtube_notes.json)")
+    parser.add_argument("--vault", help="Path to Obsidian vault (overrides config/env)")
+    parser.add_argument("--folder", help="Folder within vault (overrides config/env)")
+    parser.add_argument("--langs", help="Comma-separated language codes (overrides config/env)")
+    parser.add_argument("--ollama-url", help="Ollama server URL (overrides config/env)")
+    parser.add_argument("--model", help="Ollama model name (overrides config/env)")
+    parser.add_argument("--no-summary", action="store_true", help="Skip AI summarization, metadata only")
+    parser.add_argument("--include-transcript", action="store_true", help="Include full transcript in note (with --no-summary)")
+    parser.add_argument("--cookies", action="store_true", help="Use cookies from YTDLP_COOKIES env for age-restricted videos")
+    parser.add_argument("--proxy", action="store_true", help="Use random proxy from YTDLP_PROXY_FILE env")
+    parser.add_argument("--context-length", type=int, help="Ollama context window size (overrides config, default: 4096)")
+    parser.add_argument("--per-hour", action="store_true", help="Create separate summaries for each time segment (useful for long streams)")
+    parser.add_argument("--segment-duration", type=int, help="Segment duration in seconds for --per-hour mode (overrides config, default: 3600)")
+    
+    args = parser.parse_args()
+    
+    # Load config file
+    config = load_config(args.config)
+    
+    # Merge config with CLI args (CLI args take precedence)
+    vault = args.vault or config.get("vault")
+    folder = args.folder if args.folder is not None else config.get("folder")
+    ollama_url = args.ollama_url or config.get("ollama_url")
+    model = args.model or config.get("model")
+    no_summary = args.no_summary or config.get("no_summary", False)
+    include_transcript = args.include_transcript or config.get("include_transcript", False)
+    cookies = args.cookies or config.get("cookies", False)
+    proxy = args.proxy or config.get("proxy", False)
+    context_length = args.context_length or config.get("context_length", 4096)
+    per_hour = args.per_hour or config.get("per_hour", False)
+    segment_duration = args.segment_duration or config.get("segment_duration", 3600)
+    js_runtimes = config.get("js_runtimes")  # Optional, only from config
+    
+    # Parse languages (CLI > config > None)
+    langs_list = None
+    if args.langs:
+        langs_list = [l.strip() for l in args.langs.split(",") if l.strip()]
+    elif "langs" in config:
+        # Config can have list or comma-separated string
+        if isinstance(config["langs"], list):
+            langs_list = config["langs"]
+        else:
+            langs_list = [l.strip() for l in str(config["langs"]).split(",") if l.strip()]
+    
+    try:
+        result = process_youtube(
+            args.url,
+            vault=vault,
+            folder=folder,
+            langs=langs_list,
+            ollama_base=ollama_url,
+            model=model,
+            no_summary=no_summary,
+            include_transcript=include_transcript,
+            use_cookies=cookies,
+            use_proxy=proxy,
+            context_length=context_length,
+            per_hour=per_hour,
+            segment_duration=segment_duration,
+            js_runtimes=js_runtimes,
+        )
+        
+        print("\n✓ Processing complete!")
+        print(f"Title: {result['meta'].get('title', 'Unknown')}")
+        print(f"Channel: {result['meta'].get('channel', 'Unknown')}")
+        if result.get('note_path'):
+            print(f"Note saved: {result['note_path']}")
+        if result.get('proxy_used'):
+            print(f"Proxy used: {result['proxy_used']}")
+        
+    except Exception as e:
+        print(f"\n✗ Error: {e}", file=__import__('sys').stderr)
+        if logger.isEnabledFor(logging.DEBUG):
+            import traceback
+            traceback.print_exc()
+        __import__('sys').exit(1)
+
+
+if __name__ == "__main__":
+    main()
